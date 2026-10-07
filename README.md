@@ -6,6 +6,7 @@
 
 - [세계관 01: 창세 신화](docs/lore/01_creation_myth.md)
 - [아트 01: 캐릭터 그림체](docs/art/01_character_style.md)
+- [아트 02: 외부 에셋 선정](docs/art/02_asset_sourcing.md)
 - [개발 01: Unreal 프로젝트 설정](docs/dev/01_unreal_setup.md)
 
 ## 구조
