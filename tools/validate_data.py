@@ -32,7 +32,7 @@ SUBJECT_KOREAN_NAMES = {
     "English": "영어",
     "Math": "수학",
     "Science": "과학",
-    "Ethics": "도덕",
+    "Music": "음악",
     "Informatics": "정보",
     "History": "역사",
     "Society": "사회",

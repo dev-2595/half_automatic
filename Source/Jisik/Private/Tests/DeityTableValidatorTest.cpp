@@ -23,10 +23,10 @@ namespace JisikDeityTest
 		Rows.Add(TEXT("GOD_HARMONY"),     MakeRow(TEXT("Harmony"),     EDeityRank::Kin, ESubject::English));
 		Rows.Add(TEXT("GOD_SPACE"),        MakeRow(TEXT("Space"),        EDeityRank::Kin, ESubject::Math));
 		Rows.Add(TEXT("GOD_REASON"),     MakeRow(TEXT("Reason"),     EDeityRank::Kin, ESubject::Science));
-		Rows.Add(TEXT("GOD_JUSTICE"),      MakeRow(TEXT("Justice"),      EDeityRank::Kin, ESubject::Ethics));
+		Rows.Add(TEXT("GOD_JUSTICE"),      MakeRow(TEXT("Justice"),      EDeityRank::Kin, ESubject::Society));
 		Rows.Add(TEXT("GOD_DREAM"), MakeRow(TEXT("Dream"), EDeityRank::Kin, ESubject::Informatics));
 		Rows.Add(TEXT("GOD_TIME"),     MakeRow(TEXT("Time"),     EDeityRank::Kin, ESubject::History));
-		Rows.Add(TEXT("GOD_ORDER"),     MakeRow(TEXT("Order"),     EDeityRank::Kin, ESubject::Society));
+		Rows.Add(TEXT("GOD_EMOTION"),   MakeRow(TEXT("Emotion"),   EDeityRank::Kin, ESubject::Music));
 		return Rows;
 	}
 }

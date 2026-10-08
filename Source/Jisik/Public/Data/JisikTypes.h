@@ -12,7 +12,7 @@ enum class ESubject : uint8
 	English,
 	Math,
 	Science,
-	Ethics,
+	Music,
 	Informatics,
 	History,
 	Society,
