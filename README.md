@@ -8,6 +8,7 @@
 - [아트 01: 캐릭터 그림체](docs/art/01_character_style.md)
 - [아트 02: 외부 에셋 선정](docs/art/02_asset_sourcing.md)
 - [아트 03: 캐릭터 커스터마이징 요구사항](docs/art/03_character_customization.md)
+- [기획 01: 영역과 학습 진행 구조](docs/design/01_learning_structure.md)
 - [개발 01: Unreal 프로젝트 설정](docs/dev/01_unreal_setup.md)
 
 ## 구조
