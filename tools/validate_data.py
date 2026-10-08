@@ -5,6 +5,8 @@
   2. Rank/Subject 값이 C++ UENUM(JisikTypes.h)에 실제로 존재하는지
   3. 세계관 규칙 (FDeityTableValidator 와 동일)
   4. CSV 의 신 ID 집합이 세계관 문서(docs/lore)의 ID 집합과 일치하는지
+  5. 표시 이름(DisplayName)에 교과명이 노출되지 않는지 (몰입감 규칙)
+  6. SilhouetteOnly 가 True/False 인지
 
 사용법: python3 tools/validate_data.py   (성공 시 종료 코드 0)
 """
@@ -21,7 +23,20 @@ CSV_PATH = ROOT / "Data" / "Deities.csv"
 TYPES_HEADER = ROOT / "Source" / "Jisik" / "Public" / "Data" / "JisikTypes.h"
 LORE_DOC = ROOT / "docs" / "lore" / "01_creation_myth.md"
 
-EXPECTED_HEADER = ["Name", "DisplayName", "Rank", "Subject"]
+EXPECTED_HEADER = ["Name", "DisplayName", "Rank", "Subject", "SilhouetteOnly"]
+BOOL_VALUES = {"True", "False"}
+
+# 플레이어에게 보이는 이름에 들어가면 안 되는 교과명. ESubject 항목마다 하나씩 있어야 한다.
+SUBJECT_KOREAN_NAMES = {
+    "Korean": "국어",
+    "English": "영어",
+    "Math": "수학",
+    "Science": "과학",
+    "Ethics": "도덕",
+    "Informatics": "정보",
+    "History": "역사",
+    "Society": "사회",
+}
 UTF8_BOM = b"\xef\xbb\xbf"
 
 
@@ -60,6 +75,10 @@ def validate() -> list[str]:
     subjects = parse_enum(header_text, "ESubject")
     real_subjects = [s for s in subjects if s != "None"]
 
+    unmapped = [s for s in real_subjects if s not in SUBJECT_KOREAN_NAMES]
+    if unmapped:
+        errors.append(f"SUBJECT_KOREAN_NAMES has no entry for ESubject values {unmapped}; update tools/validate_data.py.")
+
     seen_ids: set[str] = set()
     supreme_count = 0
     subject_counts = {s: 0 for s in real_subjects}
@@ -69,7 +88,7 @@ def validate() -> list[str]:
         if len(row) != len(EXPECTED_HEADER):
             errors.append(f"{where}: expected {len(EXPECTED_HEADER)} columns, got {len(row)}.")
             continue
-        deity_id, display_name, rank, subject = (cell.strip() for cell in row)
+        deity_id, display_name, rank, subject, silhouette_only = (cell.strip() for cell in row)
 
         if not deity_id:
             errors.append(f"{where}: empty Name.")
@@ -79,6 +98,11 @@ def validate() -> list[str]:
 
         if not display_name:
             errors.append(f"{where}: empty DisplayName.")
+        for korean_name in SUBJECT_KOREAN_NAMES.values():
+            if korean_name in display_name:
+                errors.append(f"{where}: DisplayName '{display_name}' reveals the subject '{korean_name}'.")
+        if silhouette_only not in BOOL_VALUES:
+            errors.append(f"{where}: SilhouetteOnly must be one of {sorted(BOOL_VALUES)}, got '{silhouette_only}'.")
         if rank not in ranks:
             errors.append(f"{where}: Rank '{rank}' is not in EDeityRank {sorted(ranks)}.")
             continue

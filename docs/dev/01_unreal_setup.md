@@ -29,7 +29,7 @@
 | 파일 | 책임 |
 |---|---|
 | `Data/JisikTypes.h` | `ESubject`(교과), `EDeityRank`(위계) 열거형 |
-| `Data/DeityRow.h` | DataTable 한 행 = 신 하나의 정적 데이터 |
+| `Data/DeityRow.h` | DataTable 한 행 = 신 하나의 정적 데이터 (이름, 위계, 내부 교과, 실루엣 여부) |
 | `Data/DeityTableValidator` | 세계관 규칙 검사만 담당 (엔진 의존 없음 → 단위 테스트 대상) |
 | `JisikSettings.h` | 프로젝트 설정에 DataTable 경로 노출 |
 | `DeityRegistrySubsystem` | 게임 시작 시 로드 → 검증 → 조회 API 제공 |
@@ -47,6 +47,8 @@
 - 최고신(`Supreme`)은 정확히 1명이며 교과가 없다(`None`).
 - 8개 교과마다 권속신(`Kin`)이 정확히 1명씩 있다.
 - 모든 신은 표시 이름이 있다.
+- 표시 이름에는 교과명(국어·수학 등)이 들어가면 안 된다. 교과는 내부 데이터이며 플레이어에게 숨긴다. (`tools/validate_data.py`가 검사)
+- `SilhouetteOnly`는 `True`/`False`다. 기본값 `True`는 외형을 실루엣으로만 보여준다는 뜻이다.
 - CSV의 신 ID 집합은 `docs/lore/01_creation_myth.md`의 ID 집합과 같아야 한다.
 
 ## 5. 검증 실행
