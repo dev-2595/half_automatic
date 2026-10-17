@@ -18,3 +18,7 @@ Build/
 
 # Python
 __pycache__/
+
+# Blender backups
+*.blend1
+*.blend@
