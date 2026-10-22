@@ -2,3 +2,6 @@
 # bpy 5.x 는 Python 3.13 용 배포본으로 확인했다. 다른 Python 버전은 pip 가 맞는 배포본을 찾지 못할 수 있다.
 bpy==5.2.3
 pillow==13.0.0
+numpy
+scipy
+scikit-image==0.26.0

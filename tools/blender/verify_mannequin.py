@@ -3,7 +3,8 @@
 검사 항목 (기대값은 빌드 스크립트와 별도로 여기에 적는다)
   1. 객체 구성: 아마추어 1개 + 메시 2개 (이름 규칙)
   2. 뼈 목록, 그리고 루트가 "Armature" 가 아닌 이름인지
-  3. 모든 정점이 뼈에 묶여 있고 가중치 합이 1인지
+  3. 모든 정점이 뼈에 묶여 있고 가중치 합이 1이며 영향 뼈가 4개 이하인지
+  3-1. 몸이 **하나로 이어진 닫힌 표면**인지 (팔·다리가 떨어진 덩어리가 아님)
   4. 체격 모프 타깃: 이름, 기본값이 0인지, 실제로 형태가 변하는지, 값이 터무니없이 크지 않은지
   5. 비율: 키 1.0 m, 머리 : 몸, 머리 가로/세로, 팔 끝~팔 끝 폭, 몸통 폭 (스케치 v2 측정값)
   6. 포즈 시험: 팔 뼈를 돌리면 팔만 움직이고 몸통은 움직이지 않는지
@@ -45,6 +46,8 @@ EXPECTED_TORSO_WIDTH = 0.50      # 몸통 최대 폭 / 키
 TORSO_WIDTH_TOLERANCE = 0.05
 MAX_MORPH_DISPLACEMENT = 0.5  # m. 이보다 크면 모프가 망가진 것
 MIN_MORPH_DISPLACEMENT = 1e-4
+MAX_INFLUENCES = 4          # 정점 하나에 영향을 주는 뼈의 최대 수 (게임 엔진 스키닝 한계)
+MAX_BODY_TRIANGLES = 30000  # 마네킹 몸 삼각형 수 상한 (너무 무거워지지 않게)
 
 
 def world_bounds(obj: bpy.types.Object) -> tuple[Vector, Vector]:
@@ -80,6 +83,42 @@ def check_weights(meshes: dict, errors: list[str]) -> None:
             if not v.groups or abs(total - 1.0) > 1e-3:
                 errors.append(f"{name}: vertex {v.index} weight sum is {total:.4f} (must be 1).")
                 break
+            if len(v.groups) > MAX_INFLUENCES:
+                errors.append(f"{name}: vertex {v.index} has {len(v.groups)} bone influences (max {MAX_INFLUENCES}).")
+                break
+
+
+def check_connected_surface(meshes: dict, errors: list[str]) -> None:
+    """몸이 하나로 이어진(연결 요소 1개), 구멍 없는(모든 모서리가 면 2개에 공유) 표면인지 검사한다."""
+    body = meshes.get("SK_Mannequin_Body")
+    if body is None:
+        return
+    mesh = body.data
+    parent = list(range(len(mesh.vertices)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    edge_faces: dict[tuple[int, int], int] = {}
+    for poly in mesh.polygons:
+        ids = list(poly.vertices)
+        for a, b in zip(ids, ids[1:] + ids[:1]):
+            edge_faces[(min(a, b), max(a, b))] = edge_faces.get((min(a, b), max(a, b)), 0) + 1
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+    used = {v for poly in mesh.polygons for v in poly.vertices}
+    components = len({find(v) for v in used})
+    if components != 1:
+        errors.append(f"SK_Mannequin_Body: {components} separate pieces; arms and legs must be welded into one surface.")
+    open_edges = sum(1 for n in edge_faces.values() if n != 2)
+    if open_edges:
+        errors.append(f"SK_Mannequin_Body: {open_edges} edges are not shared by exactly 2 faces (holes or non-manifold).")
+    if len(mesh.polygons) > MAX_BODY_TRIANGLES:
+        errors.append(f"SK_Mannequin_Body: {len(mesh.polygons)} triangles exceeds the budget {MAX_BODY_TRIANGLES}.")
 
 
 def check_morphs(meshes: dict, errors: list[str]) -> None:
@@ -225,6 +264,7 @@ def main() -> int:
     bpy.ops.wm.open_mainfile(filepath=str(blend))
     rig, meshes = check_structure(errors)
     check_weights(meshes, errors)
+    check_connected_surface(meshes, errors)
     check_morphs(meshes, errors)
     check_proportions(meshes, errors)
     check_pose(rig, meshes, errors)

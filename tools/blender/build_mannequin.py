@@ -15,6 +15,10 @@
   docs/art/reference/mannequin_preview.png   앞 / 옆 / 뒤
   docs/art/reference/mannequin_morphs.png    체격 모프 타깃 미리보기
 
+몸통·다리·팔은 **하나로 이어진 단일 표면**이다. 각 부위를 거리 함수(SDF)로 정의하고 접합부를 부드럽게 섞은 뒤(smooth union)
+marching cubes 로 한 장의 메시로 뽑는다. 뼈 가중치와 체격 모프 타깃도 같은 거리 함수로 접합부에서 부드럽게 넘어가게 계산한다.
+(필요: numpy, scikit-image)
+
 좌표계: Z 위, 캐릭터는 -Y 를 바라본다. 캐릭터의 왼쪽이 +X 이다. 단위는 미터이며 키는 1.0 m (= Unreal 100 cm).
 """
 
@@ -26,7 +30,10 @@ import sys
 from pathlib import Path
 
 import bpy
+import numpy as np
 from mathutils import Vector
+from scipy.interpolate import PchipInterpolator
+from skimage import measure
 
 # ---------------------------------------------------------------- 치수 (미터)
 # 기준: docs/art/reference/character_style_v2.png 를 픽셀로 측정한 값 (키 481px = 1.0 m)
@@ -38,14 +45,14 @@ HEAD_RX = 0.31                            # 머리 폭 0.62 → 가로/세로 �
 HEAD_CENTER_Z = TOTAL_HEIGHT - HEAD_RZ
 NECK_Z = HEAD_CENTER_Z - HEAD_RZ          # 머리 아래끝 = 몸 위끝 (목 없음)
 
-LEG_X = 0.12
-LEG_RADIUS = 0.113                        # 두 다리 바깥 폭 ≈ 0.47
+LEG_X = 0.125
+LEG_RADIUS = 0.108                        # 두 다리 바깥 폭 ≈ 0.47, 사이에 틈(V자 자리)
 LEG_TOP_Z = 0.26                          # 가랑이 꼭대기는 몸통이 시작하는 곳 (≈ 0.22)
 KNEE_Z = 0.13
 ANKLE_Z = 0.05
 
 # 몸통 윤곽 (z, 반지름). 스케치처럼 몸통에서 발까지 옆선이 이어지도록, 아래쪽 반지름을 다리 바깥 끝(LEG_X + LEG_RADIUS)에 맞춘다.
-TORSO_PROFILE = [(0.20, 0.215), (0.30, 0.238), (0.40, 0.225), (0.46, 0.185), (0.50, 0.100), (0.52, 0.0)]
+TORSO_PROFILE = [(0.20, 0.208), (0.30, 0.229), (0.40, 0.222), (0.46, 0.185), (0.50, 0.100), (0.52, 0.0)]
 TORSO_BOTTOM_Z = TORSO_PROFILE[0][0]
 TORSO_TOP_Z = TORSO_PROFILE[-1][0]        # 머리 아래로 살짝 겹친다
 TORSO_DEPTH_RATIO = 0.65
@@ -53,14 +60,26 @@ TORSO_DEPTH_RATIO = 0.65
 # 팔: 가늘게 늘어진 막대가 아니라, 몸 옆으로 뻗은 통통한 잎 모양 (끝이 둥글고 살짝 처진다)
 ARM_ORIGIN_X = 0.14                       # 몸통 안쪽에서 시작해 옆으로 나온다
 ARM_ORIGIN_Z = 0.42
-ARM_LENGTH = 0.32
+ARM_LENGTH = 0.32                         # 어깨에서 팔 끝까지
 ARM_DROOP_DEG = 7.0
 ARM_RADIUS_Z = 0.105                      # 세로 두께 0.21
 ARM_RADIUS_Y = 0.085                      # 앞뒤 두께
-ARM_TAPER_EXPONENT = 2.2
+
+# 몸 표면 추출 (SDF + marching cubes)
+VOXEL = 0.011                             # 격자 간격 (m). 작을수록 매끈하지만 정점이 늘어난다
+BODY_BOUNDS = ((-0.52, -0.22, -0.03), (0.52, 0.22, 0.56))
+BLEND_LEG = 0.05                          # 몸통-다리 접합부를 섞는 폭
+BLEND_ARM = 0.05                          # 몸통-팔 접합부를 섞는 폭
+TORSO_EDGE_BLEND = 0.03                   # 몸통 아래·위 모서리를 둥글리는 폭
+LEG_EDGE_ROUND = 0.035                    # 다리 발바닥 모서리의 둥글기
+ARM_CENTER_ALONG = 0.12                   # 팔 타원체 중심이 어깨에서 떨어진 거리
+REGION_SOFTNESS = 0.015                   # 부위(몸통/다리/팔) 가중치가 섞이는 폭
+MAX_INFLUENCES = 4                        # 정점 하나에 영향을 주는 뼈의 최대 수
+MIN_WEIGHT = 0.01                          # 1% 미만의 영향은 버린다 (멀리 떨어진 부위가 따라 움직이는 것을 막는다)
 
 SEGMENTS = 28
 RINGS = 16
+REGIONS = ("torso", "leg_l", "leg_r", "arm_l", "arm_r")
 
 # 체격 모프 타깃 크기
 HEAD_BIG, HEAD_SMALL = 1.30, 0.75
@@ -107,10 +126,6 @@ def smoothstep(edge0: float, edge1: float, x: float) -> float:
         return 1.0 if x >= edge1 else 0.0
     t = max(0.0, min(1.0, (x - edge0) / (edge1 - edge0)))
     return t * t * (3.0 - 2.0 * t)
-
-
-def sign(x: float) -> float:
-    return 1.0 if x >= 0.0 else -1.0
 
 
 class Part:
@@ -165,128 +180,191 @@ def sphere_profile(radius: float, center_z: float) -> list[tuple[float, float]]:
     return out
 
 
-def capsule_profile(radius: float, z_bottom: float, z_top: float, flat_bottom: bool = False) -> list[tuple[float, float]]:
-    out: list[tuple[float, float]] = []
-    half = RINGS // 2
-    if flat_bottom:
-        # 바닥에 닿는 발: 둥근 모서리의 납작한 바닥
-        out += [(0.0, z_bottom), (radius * 0.65, z_bottom), (radius * 0.93, z_bottom + radius * 0.25)]
-        out.append((radius, z_bottom + radius * 0.6))
-    else:
-        for i in range(half):
-            a = -math.pi / 2 + (math.pi / 2) * i / half
-            out.append((max(0.0, radius * math.cos(a)), z_bottom + radius + radius * math.sin(a)))
-        out[0] = (0.0, out[0][1])
-    for i in range(half + 1):
-        a = (math.pi / 2) * i / half
-        out.append((max(0.0, radius * math.cos(a)), z_top - radius + radius * math.sin(a)))
-    out[-1] = (0.0, out[-1][1])
-    return out
-
-
-def torso_radius(z: float) -> float:
-    """TORSO_PROFILE 의 조절점 사이를 부드럽게 이어 z 높이의 반지름을 구한다."""
-    points = TORSO_PROFILE
-    if z <= points[0][0]:
-        return points[0][1]
-    for (z0, r0), (z1, r1) in zip(points, points[1:]):
-        if z <= z1:
-            return r0 + (r1 - r0) * smoothstep(z0, z1, z)
-    return points[-1][1]
-
-
 def build_head() -> Part:
     head = Part("head")
     head.add_lathe(sphere_profile(HEAD_RZ, HEAD_CENTER_Z), scale=(HEAD_RX / HEAD_RZ, 1.0))
     return head
 
 
-def paddle_profile(length: float, radius: float) -> list[tuple[float, float]]:
-    """끝이 둥글게 좁아지는 잎 모양 단면 (반지름, 축 방향 거리)."""
-    out = [(0.0, 0.0), (radius, 0.0)]
-    steps = RINGS
-    for i in range(1, steps + 1):
-        t = i / steps
-        out.append((radius * max(0.0, 1.0 - t ** ARM_TAPER_EXPONENT) ** 0.5, length * t))
-    out[-1] = (0.0, out[-1][1])
-    return out
+# ---------------------------------------------------------------- 정점 가중치
+# ---------------------------------------------------------------- 몸 표면 (SDF)
+def smin(a, b, k):
+    """부드러운 합집합. 두 값이 k 안쪽으로 가까우면 경계를 매끈하게 섞는다."""
+    h = np.maximum(k - np.abs(a - b), 0.0) / k
+    return np.minimum(a, b) - h * h * k * 0.25
 
 
-def build_body_parts() -> list[Part]:
-    parts: list[Part] = []
+def smax(a, b, k):
+    return -smin(-a, -b, k)
 
-    torso = Part("torso")
-    profile = [(0.0, TORSO_BOTTOM_Z)]  # 아래쪽은 납작한 면 (가랑이 위를 덮는다)
-    steps = RINGS * 2
-    for i in range(steps + 1):
-        z = TORSO_BOTTOM_Z + (TORSO_TOP_Z - TORSO_BOTTOM_Z) * i / steps
-        profile.append((torso_radius(z), z))
-    profile[-1] = (0.0, profile[-1][1])
-    torso.add_lathe(profile, scale=(1.0, TORSO_DEPTH_RATIO))
-    parts.append(torso)
 
-    for side, sx in (("l", 1.0), ("r", -1.0)):
-        leg = Part("leg")
-        leg.add_lathe(capsule_profile(LEG_RADIUS, 0.0, LEG_TOP_Z, flat_bottom=True), center=(sx * LEG_X, 0.0))
-        parts.append(leg)
+_TORSO_Z = np.array([p[0] for p in TORSO_PROFILE])
+_TORSO_R = np.array([p[1] for p in TORSO_PROFILE])
+_TORSO_SPLINE = PchipInterpolator(_TORSO_Z, _TORSO_R)
+_TORSO_SLOPE = _TORSO_SPLINE.derivative()
 
-        arm = Part("arm")
-        direction = Vector((sx * ARM_DIR[0], 0.0, ARM_DIR[2]))
-        up = Vector((sx * math.sin(_DROOP), 0.0, math.cos(_DROOP)))  # 팔 방향에 수직인 세로 방향
-        origin = Vector((sx * ARM_ORIGIN_X, 0.0, ARM_ORIGIN_Z))
 
-        def to_world(x, y, z, origin=origin, direction=direction, up=up):
-            p = origin + direction * z + up * x + Vector((0.0, 1.0, 0.0)) * y
-            return (p.x, p.y, p.z)
+def torso_radius_np(z: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """TORSO_PROFILE 의 조절점을 부드러운 곡선(PCHIP)으로 이어 z 높이의 (반지름, 기울기)를 구한다.
+    조절점마다 기울기가 0이 되는 보간(smoothstep)은 몸통에 물결 같은 굴곡을 만들어서 쓰지 않는다."""
+    zc = np.clip(z, _TORSO_Z[0], _TORSO_Z[-1])
+    inside = (z >= _TORSO_Z[0]) & (z <= _TORSO_Z[-1])
+    return _TORSO_SPLINE(zc), np.where(inside, _TORSO_SLOPE(zc), 0.0)
 
-        arm.add_lathe(paddle_profile(ARM_LENGTH, ARM_RADIUS_Z), scale=(1.0, ARM_RADIUS_Y / ARM_RADIUS_Z),
-                      transform=to_world)
-        parts.append(arm)
-    return parts
+
+def field_torso(p: np.ndarray) -> np.ndarray:
+    x, y, z = p[:, 0], p[:, 1], p[:, 2]
+    rho = np.sqrt(x * x + (y / TORSO_DEPTH_RATIO) ** 2)
+    radius, slope = torso_radius_np(z)
+    radial = (rho - radius) / np.sqrt(1.0 + slope * slope) * TORSO_DEPTH_RATIO
+    d = smax(radial, TORSO_BOTTOM_Z - z, TORSO_EDGE_BLEND)
+    return smax(d, z - TORSO_TOP_Z, TORSO_EDGE_BLEND)
+
+
+def field_leg(p: np.ndarray, sx: float) -> np.ndarray:
+    """바닥은 납작하고 모서리가 둥근 원기둥."""
+    rho = np.hypot(p[:, 0] - sx * LEG_X, p[:, 1])
+    half = LEG_TOP_Z / 2.0
+    qx = rho - (LEG_RADIUS - LEG_EDGE_ROUND)
+    qy = np.abs(p[:, 2] - half) - (half - LEG_EDGE_ROUND)
+    return (np.minimum(np.maximum(qx, qy), 0.0)
+            + np.hypot(np.maximum(qx, 0.0), np.maximum(qy, 0.0)) - LEG_EDGE_ROUND)
+
+
+def arm_frame(sx: float):
+    direction = np.array([sx * ARM_DIR[0], 0.0, ARM_DIR[2]])
+    up = np.array([sx * math.sin(_DROOP), 0.0, math.cos(_DROOP)])
+    origin = np.array([sx * ARM_ORIGIN_X, 0.0, ARM_ORIGIN_Z])
+    return origin, direction, up
+
+
+def field_arm(p: np.ndarray, sx: float) -> np.ndarray:
+    """끝이 둥근 통통한 잎 모양 = 타원체 (어깨 쪽은 몸통 안에 묻힌다)."""
+    origin, direction, up = arm_frame(sx)
+    q = p - (origin + direction * ARM_CENTER_ALONG)
+    local = np.stack([q @ direction, q @ up, q[:, 1]], axis=1)
+    radii = np.array([ARM_LENGTH - ARM_CENTER_ALONG, ARM_RADIUS_Z, ARM_RADIUS_Y])
+    k0 = np.linalg.norm(local / radii, axis=1)
+    k1 = np.linalg.norm(local / (radii * radii), axis=1)
+    return k0 * (k0 - 1.0) / np.maximum(k1, 1e-9)
+
+
+def body_fields(p: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(합쳐진 거리, 부위별 거리 [N, 5])."""
+    torso = field_torso(p)
+    leg_l, leg_r = field_leg(p, 1.0), field_leg(p, -1.0)
+    arm_l, arm_r = field_arm(p, 1.0), field_arm(p, -1.0)
+    # 두 다리는 서로 섞지 않는다 (가랑이가 갈라진 채 유지되어야 한다)
+    merged = smin(torso, np.minimum(leg_l, leg_r), BLEND_LEG)
+    merged = smin(merged, np.minimum(arm_l, arm_r), BLEND_ARM)
+    return merged, np.stack([torso, leg_l, leg_r, arm_l, arm_r], axis=1)
+
+
+def region_weights(parts: np.ndarray) -> np.ndarray:
+    """각 정점이 몸통/왼다리/오른다리/왼팔/오른팔에 속하는 정도 (합 1). 접합부에서는 부드럽게 섞인다."""
+    w = np.exp(-(parts - parts.min(axis=1, keepdims=True)) / REGION_SOFTNESS)
+    return w / w.sum(axis=1, keepdims=True)
+
+
+def project_to_surface(verts: np.ndarray, iterations: int = 3, eps: float = 0.0015) -> np.ndarray:
+    """격자 보간 오차를 줄이기 위해 각 정점을 거리 함수의 정확한 표면(거리 0)으로 옮긴다."""
+    v = verts.copy()
+    for _ in range(iterations):
+        d = body_fields(v)[0]
+        grad = np.stack([
+            (body_fields(v + np.eye(3)[i] * eps)[0] - body_fields(v - np.eye(3)[i] * eps)[0]) / (2 * eps)
+            for i in range(3)], axis=1)
+        norm2 = np.maximum((grad * grad).sum(axis=1, keepdims=True), 1e-12)
+        v = v - d[:, None] * grad / norm2
+    return v
+
+
+def build_body_mesh() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """단일 표면 메시 (정점, 삼각형 면, 정점별 부위 가중치 [N, 5])."""
+    lo, hi = (np.array(b) for b in BODY_BOUNDS)
+    counts = np.ceil((hi - lo) / VOXEL).astype(int) + 1
+    axes = [lo[i] + np.arange(counts[i]) * VOXEL for i in range(3)]
+    grid = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
+    volume = body_fields(grid)[0].reshape(tuple(counts))
+    verts, faces, _normals, _values = measure.marching_cubes(volume, level=0.0, spacing=(VOXEL, VOXEL, VOXEL))
+    verts = project_to_surface(verts + lo)
+
+    # 면의 방향이 바깥을 향하도록 맞춘다 (부호 있는 부피가 양수여야 한다)
+    a, b, c = verts[faces[:, 0]], verts[faces[:, 1]], verts[faces[:, 2]]
+    if np.einsum("ij,ij->i", a, np.cross(b, c)).sum() < 0.0:
+        faces = faces[:, ::-1]
+
+    regions = region_weights(body_fields(verts)[1])
+    return verts, np.ascontiguousarray(faces), regions
 
 
 # ---------------------------------------------------------------- 정점 가중치
-def body_weights(tag: str, x: float, z: float) -> dict[str, float]:
-    side = "l" if x >= 0 else "r"
-    if tag == "torso":
-        w_pelvis = 1.0 - smoothstep(0.22, 0.30, z)
-        weights = {"spine_01": 1.0 - w_pelvis, "pelvis": w_pelvis}
-    elif tag == "leg":
+def region_bone_weights(region: str, x: float, z: float) -> dict[str, float]:
+    """한 부위 안에서 높이(또는 팔은 몸에서 떨어진 거리)에 따라 뼈에 나누는 가중치."""
+    if region == "torso":
+        pelvis = 1.0 - smoothstep(0.22, 0.30, z)
+        return {"spine_01": 1.0 - pelvis, "pelvis": pelvis}
+    side = region[-1]
+    if region.startswith("leg"):
         upper = smoothstep(KNEE_Z - 0.03, KNEE_Z + 0.03, z)          # 무릎 위쪽일수록 1
         foot = 1.0 - smoothstep(ANKLE_Z - 0.015, ANKLE_Z + 0.015, z)  # 발목 아래쪽일수록 1
-        calf = 1.0 - upper - foot
-        weights = {f"thigh_{side}": upper, f"calf_{side}": max(0.0, calf), f"foot_{side}": foot}
-    elif tag == "arm":
-        reach = abs(x)  # 팔은 거의 수평이므로 몸에서 떨어진 거리로 구간을 나눈다
-        upper = 1.0 - smoothstep(0.22, 0.30, reach)
-        hand = smoothstep(0.35, 0.42, reach)
-        lower = 1.0 - upper - hand
-        weights = {f"upperarm_{side}": upper, f"lowerarm_{side}": max(0.0, lower), f"hand_{side}": hand}
-    else:
-        raise ValueError(tag)
-    total = sum(weights.values())
-    return {k: v / total for k, v in weights.items() if v / total > 1e-6}
+        return {f"thigh_{side}": upper, f"calf_{side}": max(0.0, 1.0 - upper - foot), f"foot_{side}": foot}
+    reach = abs(x)  # 팔은 거의 수평이므로 몸에서 떨어진 거리로 구간을 나눈다
+    upper = 1.0 - smoothstep(0.22, 0.30, reach)
+    hand = smoothstep(0.35, 0.42, reach)
+    return {f"upperarm_{side}": upper, f"lowerarm_{side}": max(0.0, 1.0 - upper - hand), f"hand_{side}": hand}
+
+
+def body_vertex_weights(verts: np.ndarray, regions: np.ndarray) -> list[dict[str, float]]:
+    out: list[dict[str, float]] = []
+    for (x, _y, z), region_w in zip(verts, regions):
+        merged: dict[str, float] = {}
+        for name, rw in zip(REGIONS, region_w):
+            if rw < MIN_WEIGHT:
+                continue
+            for bone, bw in region_bone_weights(name, x, z).items():
+                merged[bone] = merged.get(bone, 0.0) + rw * bw
+        kept = sorted(((b, w) for b, w in merged.items() if w >= MIN_WEIGHT), key=lambda kv: -kv[1])[:MAX_INFLUENCES]
+        total = sum(w for _b, w in kept)
+        out.append({b: w / total for b, w in kept})
+    return out
+
+
+# ---------------------------------------------------------------- 체격 모프 타깃 (몸)
+def body_morphs(coords: np.ndarray, regions: np.ndarray) -> dict[str, np.ndarray]:
+    x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
+    w_torso, w_leg_l, w_leg_r, w_arm_l, w_arm_r = regions.T
+    w_leg = w_leg_l + w_leg_r
+    arm_side = w_arm_l - w_arm_r  # 왼팔 쪽이면 +, 오른팔 쪽이면 -
+    out = {name: np.zeros_like(coords) for name in BODY_MORPHS}
+
+    out["torso_wide"][:, 0] = x * TORSO_WIDE_X * w_torso + arm_side * TORSO_WIDE_ARM
+    out["torso_wide"][:, 1] = y * TORSO_WIDE_Y * w_torso
+    out["torso_slim"][:, 0] = -x * TORSO_SLIM_X * w_torso - arm_side * TORSO_SLIM_ARM
+
+    for key, dz in (("legs_long", LEGS_LONG_DZ), ("legs_short", LEGS_SHORT_DZ)):
+        # 다리: 발은 바닥에 두고 위쪽을 늘이거나 줄인다. 나머지(몸통·팔)는 통째로 위아래로 이동한다.
+        out[key][:, 2] = dz * (w_leg * (z / LEG_TOP_Z) + (1.0 - w_leg))
+
+    # 팔: 어깨를 기준으로 팔 방향으로만 늘이고 줄인다 (두께는 그대로)
+    for key, factor in (("arms_long", ARMS_LONG), ("arms_short", ARMS_SHORT)):
+        for sx, w_arm in ((1.0, w_arm_l), (-1.0, w_arm_r)):
+            origin, direction, _up = arm_frame(sx)
+            along = (coords - origin) @ direction
+            out[key] += np.outer(w_arm * along * (factor - 1.0), direction)
+    return out
 
 
 # ---------------------------------------------------------------- Blender 객체
-def make_mesh_object(name: str, parts: list[Part], collection) -> tuple[bpy.types.Object, list[str]]:
-    verts: list[tuple[float, float, float]] = []
-    faces: list[tuple[int, ...]] = []
-    tags: list[str] = []
-    for part in parts:
-        offset = len(verts)
-        verts += part.verts
-        faces += [tuple(i + offset for i in f) for f in part.faces]
-        tags += [part.tag] * len(part.verts)
-
+def make_mesh_object(name: str, verts, faces, collection) -> bpy.types.Object:
     mesh = bpy.data.meshes.new(name)
-    mesh.from_pydata(verts, [], faces)
+    mesh.from_pydata([tuple(float(c) for c in v) for v in verts], [], [tuple(int(i) for i in f) for f in faces])
     mesh.update()
     for poly in mesh.polygons:
         poly.use_smooth = True
     obj = bpy.data.objects.new(name, mesh)
     collection.objects.link(obj)
-    return obj, tags
+    return obj
 
 
 def create_armature(collection) -> bpy.types.Object:
@@ -325,7 +403,7 @@ def add_morph(obj, name: str, offsets: list[Vector]) -> None:
     key.slider_max = 1.0
     key.value = 0.0  # 기본값이 0 이라고 가정하지 않는다 (bpy 5.x 에서 1.0 으로 저장되는 것을 확인함)
     for point, delta in zip(key.data, offsets):
-        point.co = point.co + delta
+        point.co = point.co + Vector(tuple(float(c) for c in delta))
 
 
 def head_morphs(coords: list[Vector]) -> dict[str, list[Vector]]:
@@ -336,31 +414,6 @@ def head_morphs(coords: list[Vector]) -> dict[str, list[Vector]]:
         "legs_long": [Vector((0.0, 0.0, LEGS_LONG_DZ)) for _ in coords],
         "legs_short": [Vector((0.0, 0.0, LEGS_SHORT_DZ)) for _ in coords],
     }
-
-
-def body_morphs(coords: list[Vector], tags: list[str]) -> dict[str, list[Vector]]:
-    out: dict[str, list[Vector]] = {name: [] for name in BODY_MORPHS}
-    for c, tag in zip(coords, tags):
-        s = sign(c.x)
-        zero = Vector((0.0, 0.0, 0.0))
-
-        out["torso_wide"].append(
-            Vector((c.x * TORSO_WIDE_X, c.y * TORSO_WIDE_Y, 0.0)) if tag == "torso"
-            else Vector((s * TORSO_WIDE_ARM, 0.0, 0.0)) if tag == "arm" else zero)
-        out["torso_slim"].append(
-            Vector((-c.x * TORSO_SLIM_X, 0.0, 0.0)) if tag == "torso"
-            else Vector((-s * TORSO_SLIM_ARM, 0.0, 0.0)) if tag == "arm" else zero)
-
-        for key, dz in (("legs_long", LEGS_LONG_DZ), ("legs_short", LEGS_SHORT_DZ)):
-            # 다리: 발은 바닥에 두고 위쪽을 늘이거나 줄인다. 나머지(몸통·팔)는 통째로 위아래로 이동한다.
-            out[key].append(Vector((0.0, 0.0, dz * (c.z / LEG_TOP_Z if tag == "leg" else 1.0))))
-
-        # 팔: 어깨를 기준으로 팔 방향으로만 늘이고 줄인다 (두께는 그대로)
-        direction = Vector((s * ARM_DIR[0], 0.0, ARM_DIR[2]))
-        pivot = Vector((s * ARM_ORIGIN_X, 0.0, ARM_ORIGIN_Z))
-        for key, factor in (("arms_long", ARMS_LONG), ("arms_short", ARMS_SHORT)):
-            out[key].append(direction * ((c - pivot).dot(direction) * (factor - 1.0)) if tag == "arm" else zero)
-    return out
 
 
 def make_material() -> bpy.types.Material:
@@ -382,15 +435,15 @@ def build_scene():
 
     rig = create_armature(collection)
 
-    head_obj, head_tags = make_mesh_object(HEAD_NAME, [build_head()], collection)
-    body_parts = build_body_parts()
-    body_obj, body_tags = make_mesh_object(BODY_NAME, body_parts, collection)
+    head = build_head()
+    head_obj = make_mesh_object(HEAD_NAME, head.verts, head.faces, collection)
+    body_verts, body_faces, body_regions = build_body_mesh()
+    body_obj = make_mesh_object(BODY_NAME, body_verts, body_faces, collection)
 
-    head_coords = [v.co.copy() for v in head_obj.data.vertices]
-    body_coords = [v.co.copy() for v in body_obj.data.vertices]
+    head_coords = [Vector(v) for v in head.verts]
 
-    skin(head_obj, rig, [{"head": 1.0} for _ in head_coords])
-    skin(body_obj, rig, [body_weights(t, c.x, c.z) for t, c in zip(body_tags, body_coords)])
+    skin(head_obj, rig, [{"head": 1.0} for _ in head.verts])
+    skin(body_obj, rig, body_vertex_weights(body_verts, body_regions))
 
     for obj in (head_obj, body_obj):
         obj.data.materials.append(material)
@@ -399,7 +452,7 @@ def build_scene():
     for name, offsets in head_morphs(head_coords).items():
         add_morph(head_obj, name, offsets)
     body_obj.shape_key_add(name="Basis", from_mix=False)
-    for name, offsets in body_morphs(body_coords, body_tags).items():
+    for name, offsets in body_morphs(body_verts, body_regions).items():
         add_morph(body_obj, name, offsets)
 
     return rig, head_obj, body_obj
