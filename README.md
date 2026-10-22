@@ -21,6 +21,9 @@ Jisik.uproject          Unreal 프로젝트
 Source/Jisik/           게임 C++ 모듈
 Config/                 프로젝트 설정
 Data/                   원본 데이터 (CSV → DataTable)
+Art/Blender/            Blender 원본 (.blend)
+Art/Export/             Unreal 로 가져올 .fbx
+tools/blender/          마네킹 생성·검사 스크립트
 tools/validate_data.py  데이터 검사 (Unreal 불필요)
 docs/                   기획 문서
 ```

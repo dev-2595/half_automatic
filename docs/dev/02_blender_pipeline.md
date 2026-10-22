@@ -68,3 +68,57 @@ Art/Export/     내보낸 .fbx (Unreal이 읽는 파일)
 - [ ] Shape Key 하나(예: 머리 크기)가 Morph Target으로 들어오는가
 - [ ] 같은 Skeleton을 쓰는 의상 메시가 몸과 함께 움직이는가
 - [ ] 손·발 끝에 불필요한 뼈가 없는가
+
+## 7. 기본 마네킹 빌드 스크립트 (v1)
+
+마네킹을 **스크립트로 생성**한다. 모델링 과정이 텍스트로 남아 수정·재현이 쉽다.
+
+| 파일 | 역할 |
+|---|---|
+| `tools/blender/build_mannequin.py` | 마네킹 생성 → `.blend` 저장 → `.fbx` 내보내기 → 미리보기 렌더 |
+| `tools/blender/verify_mannequin.py` | 산출물이 문서의 요구를 지키는지 검사 (기대값은 빌드 스크립트와 별도로 적음) |
+| `Art/Blender/Mannequin.blend` | 생성된 원본 |
+| `Art/Export/SK_Mannequin.fbx` | Unreal 로 가져올 파일 |
+| `docs/art/reference/mannequin_preview.png` | 앞 / 옆 / 뒤 |
+| `docs/art/reference/mannequin_morphs.png` | 체격 모프 타깃 9컷 |
+
+### 실행
+
+```bash
+# 방법 1: Blender 가 설치된 경우
+blender -b -P tools/blender/build_mannequin.py -- --out-root .
+blender -b -P tools/blender/verify_mannequin.py -- --root .
+
+# 방법 2: bpy 모듈 (Python 3.13)
+pip install -r tools/blender/requirements.txt
+python3 tools/blender/build_mannequin.py --out-root .
+python3 tools/blender/verify_mannequin.py --root .
+```
+
+### 만들어지는 것
+
+- **메시 2개**: `SK_Mannequin_Body`(몸통·다리·팔), `SK_Mannequin_Head`(머리). 얼굴을 몸과 분리된 부품으로 두는 방향([아트 03](../art/03_character_customization.md))에 맞춰 머리를 따로 뒀다.
+- **뼈대 1개** `mannequin_rig`: root, pelvis, spine_01, head, 좌우 upperarm·lowerarm·hand·thigh·calf·foot (16개). 두 메시가 같은 뼈대를 쓴다.
+- **체격 모프 타깃**: 값 0~1, 기본값 0
+
+| 메시 | 모프 타깃 |
+|---|---|
+| Head | `head_big`, `head_small`, `legs_long`, `legs_short` |
+| Body | `torso_wide`, `torso_slim`, `legs_long`, `legs_short`, `arms_long`, `arms_short` |
+
+`legs_long`/`legs_short`는 **두 메시에 같은 이름**으로 있다. 키 변화는 몸 전체가 함께 올라가야 하므로, 게임 코드는 두 컴포넌트에 같은 이름·같은 값을 넣어야 한다.
+
+### 검증한 것 / 하지 못한 것
+
+| 구분 | 내용 |
+|---|---|
+| 검증함 (`verify_mannequin.py`) | 객체·뼈 구성, 정점 가중치 합 1, 모프 타깃 이름·기본값 0·실제 변형, 키 1.0 m, 머리:몸 ≈ 1:1, 머리 가로≈세로, 팔 뼈를 돌렸을 때 팔만 움직임, **FBX 를 다시 읽었을 때** 메시·모프 타깃·뼈가 남아 있고 끝 뼈(`_end`)가 없음 |
+| 검증 못 함 | **Unreal 에서 가져와 보지 못했다.** 스케일(§3 방법 B `Apply Scalings: FBX All` 로 내보냄), 모프 타깃 인식, 뼈 방향은 §6 체크리스트로 직접 확인해야 한다 |
+
+### 알려진 한계
+
+- `legs_long`, `arms_long` 등 **길이 모프 타깃은 메시만 바꾸고 뼈는 그대로**다. 값이 작을 때는 괜찮지만 크게 쓰면 관절이 어긋나 보일 수 있다. 큰 체격 변화는 Unreal 에서 뼈 스케일로 보완하는 방법을 검토한다.
+- 몸통·다리·팔은 **서로 겹친 별개 덩어리**다 (용접하지 않음). 의상으로 덮는 전제이며, 맨몸을 가까이서 보여줄 경우 이음새를 다듬어야 한다.
+- 얼굴·손가락·옷은 없다 (마네킹이므로 의도된 것).
+- 미리보기 렌더의 색·조명은 확인용이며 게임 머티리얼이 아니다.
+- 스케치의 픽셀 비율을 기준으로 한 **첫 버전**이다. 모양을 바꾸려면 `build_mannequin.py` 상단의 치수 상수를 고치고 다시 실행한다.
