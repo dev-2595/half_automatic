@@ -1,6 +1,7 @@
 """기본 마네킹(베이스 바디)을 Blender에서 만들어 .blend / .fbx / 미리보기로 저장한다.
 
-기준: docs/art/01_character_style.md (약 2등신, 머리 : 몸 ≈ 1 : 1, 목 없음, 손가락 없음)
+기준: docs/art/01_character_style.md, 스케치 docs/art/reference/character_style_v2.png
+      (약 2등신, 큰 타원형 머리, 목 없음, 옆으로 뻗은 통통한 잎 모양 팔, 갈라진 하체, 손가락 없음)
       docs/art/03_character_customization.md (공용 뼈대 + 체격 모프 타깃)
       docs/dev/02_blender_pipeline.md (내보내기 설정)
 
@@ -28,43 +29,57 @@ import bpy
 from mathutils import Vector
 
 # ---------------------------------------------------------------- 치수 (미터)
+# 기준: docs/art/reference/character_style_v2.png 를 픽셀로 측정한 값 (키 481px = 1.0 m)
+#   머리 300 x 261px (가로/세로 1.15), 몸통 폭 위 0.38 / 최대 0.50 / 아래 0.47,
+#   가랑이 꼭대기 0.22, 팔 끝~팔 끝 0.92, 팔 두께 0.22
 TOTAL_HEIGHT = 1.0
-HEAD_RADIUS = TOTAL_HEIGHT / 4            # 머리 높이 = 키의 절반 (머리 : 몸 = 1 : 1)
-HEAD_CENTER_Z = TOTAL_HEIGHT - HEAD_RADIUS
-NECK_Z = TOTAL_HEIGHT / 2                 # 몸통 위끝 = 머리 아래끝 (목 없음)
+HEAD_RZ = 0.27                            # 머리 높이 0.54 (머리 : 몸 ≈ 1.17 : 1)
+HEAD_RX = 0.31                            # 머리 폭 0.62 → 가로/세로 ≈ 1.15 (원보다 약간 넓은 타원)
+HEAD_CENTER_Z = TOTAL_HEIGHT - HEAD_RZ
+NECK_Z = HEAD_CENTER_Z - HEAD_RZ          # 머리 아래끝 = 몸 위끝 (목 없음)
 
-LEG_X = 0.07
-LEG_RADIUS = 0.062
-LEG_TOP_Z = 0.22                          # 다리 길이 ≈ 몸 높이의 40%
-KNEE_Z = 0.11
-ANKLE_Z = 0.04
+LEG_X = 0.12
+LEG_RADIUS = 0.113                        # 두 다리 바깥 폭 ≈ 0.47
+LEG_TOP_Z = 0.26                          # 가랑이 꼭대기는 몸통이 시작하는 곳 (≈ 0.22)
+KNEE_Z = 0.13
+ANKLE_Z = 0.05
 
-TORSO_BOTTOM_Z = 0.17
-TORSO_TOP_Z = 0.53                        # 머리 아래로 살짝 겹친다
-TORSO_BOTTOM_WIDTH = 0.150                # 아래로 갈수록 넓어지는 몸통
-TORSO_TOP_WIDTH = 0.110
-TORSO_DEPTH_RATIO = 0.88
+# 몸통 윤곽 (z, 반지름). 스케치처럼 몸통에서 발까지 옆선이 이어지도록, 아래쪽 반지름을 다리 바깥 끝(LEG_X + LEG_RADIUS)에 맞춘다.
+TORSO_PROFILE = [(0.20, 0.215), (0.30, 0.238), (0.40, 0.225), (0.46, 0.185), (0.50, 0.100), (0.52, 0.0)]
+TORSO_BOTTOM_Z = TORSO_PROFILE[0][0]
+TORSO_TOP_Z = TORSO_PROFILE[-1][0]        # 머리 아래로 살짝 겹친다
+TORSO_DEPTH_RATIO = 0.65
 
-ARM_X = 0.142                             # 팔은 몸통 옆에 붙어 늘어진다 (스케치)
-ARM_RADIUS = 0.030
-SHOULDER_Z = 0.46
-ELBOW_Z = 0.33
-WRIST_Z = 0.22
-HAND_END_Z = 0.15
-ARM_CURL = 0.020                          # 손끝이 몸 안쪽으로 살짝 말린다
+# 팔: 가늘게 늘어진 막대가 아니라, 몸 옆으로 뻗은 통통한 잎 모양 (끝이 둥글고 살짝 처진다)
+ARM_ORIGIN_X = 0.14                       # 몸통 안쪽에서 시작해 옆으로 나온다
+ARM_ORIGIN_Z = 0.42
+ARM_LENGTH = 0.32
+ARM_DROOP_DEG = 7.0
+ARM_RADIUS_Z = 0.105                      # 세로 두께 0.21
+ARM_RADIUS_Y = 0.085                      # 앞뒤 두께
+ARM_TAPER_EXPONENT = 2.2
 
 SEGMENTS = 28
 RINGS = 16
 
 # 체격 모프 타깃 크기
 HEAD_BIG, HEAD_SMALL = 1.30, 0.75
-TORSO_WIDE_X, TORSO_WIDE_Y, TORSO_WIDE_ARM = 0.25, 0.15, 0.030
-TORSO_SLIM_X, TORSO_SLIM_ARM = 0.20, 0.020
+TORSO_WIDE_X, TORSO_WIDE_Y, TORSO_WIDE_ARM = 0.25, 0.15, 0.050
+TORSO_SLIM_X, TORSO_SLIM_ARM = 0.20, 0.030
 LEGS_LONG_DZ, LEGS_SHORT_DZ = 0.10, -0.06
 ARMS_LONG, ARMS_SHORT = 1.25, 0.75
 
 HEAD_MORPHS = ["head_big", "head_small", "legs_long", "legs_short"]
 BODY_MORPHS = ["torso_wide", "torso_slim", "legs_long", "legs_short", "arms_long", "arms_short"]
+
+_DROOP = math.radians(ARM_DROOP_DEG)
+ARM_DIR = (math.cos(_DROOP), 0.0, -math.sin(_DROOP))  # +X쪽(캐릭터 왼쪽) 팔의 방향
+
+
+def arm_point(sx: float, along: float) -> tuple[float, float, float]:
+    """어깨에서 `along` 미터 떨어진 팔 위의 점."""
+    return (sx * (ARM_ORIGIN_X + ARM_DIR[0] * along), 0.0, ARM_ORIGIN_Z + ARM_DIR[2] * along)
+
 
 BONES = {
     # 이름: (head, tail, parent)
@@ -74,12 +89,12 @@ BONES = {
     "head": ((0, 0, NECK_Z), (0, 0, TOTAL_HEIGHT), "spine_01"),
 }
 for _side, _sx in (("l", 1.0), ("r", -1.0)):
-    BONES[f"upperarm_{_side}"] = ((_sx * ARM_X, 0, SHOULDER_Z), (_sx * ARM_X, 0, ELBOW_Z), "spine_01")
-    BONES[f"lowerarm_{_side}"] = ((_sx * ARM_X, 0, ELBOW_Z), (_sx * ARM_X, 0, WRIST_Z), f"upperarm_{_side}")
-    BONES[f"hand_{_side}"] = ((_sx * ARM_X, 0, WRIST_Z), (_sx * ARM_X, 0, HAND_END_Z), f"lowerarm_{_side}")
-    BONES[f"thigh_{_side}"] = ((_sx * LEG_X, 0, LEG_TOP_Z), (_sx * LEG_X, 0, KNEE_Z), "pelvis")
+    BONES[f"upperarm_{_side}"] = (arm_point(_sx, 0.0), arm_point(_sx, 0.12), "spine_01")
+    BONES[f"lowerarm_{_side}"] = (arm_point(_sx, 0.12), arm_point(_sx, 0.23), f"upperarm_{_side}")
+    BONES[f"hand_{_side}"] = (arm_point(_sx, 0.23), arm_point(_sx, ARM_LENGTH), f"lowerarm_{_side}")
+    BONES[f"thigh_{_side}"] = ((_sx * LEG_X, 0, LEG_TOP_Z - 0.02), (_sx * LEG_X, 0, KNEE_Z), "pelvis")
     BONES[f"calf_{_side}"] = ((_sx * LEG_X, 0, KNEE_Z), (_sx * LEG_X, 0, ANKLE_Z), f"thigh_{_side}")
-    BONES[f"foot_{_side}"] = ((_sx * LEG_X, 0, ANKLE_Z), (_sx * LEG_X, -0.07, 0.025), f"calf_{_side}")
+    BONES[f"foot_{_side}"] = ((_sx * LEG_X, 0, ANKLE_Z), (_sx * LEG_X, -0.09, 0.03), f"calf_{_side}")
 
 RIG_NAME = "mannequin_rig"  # "Armature" 이라는 이름은 Unreal 이 버릴 수 있다 (docs/dev/02)
 BODY_NAME = "SK_Mannequin_Body"
@@ -106,7 +121,7 @@ class Part:
         self.verts: list[tuple[float, float, float]] = []
         self.faces: list[tuple[int, ...]] = []
 
-    def add_lathe(self, profile: list[tuple[float, float]], center=(0.0, 0.0), scale=(1.0, 1.0)) -> None:
+    def add_lathe(self, profile: list[tuple[float, float]], center=(0.0, 0.0), scale=(1.0, 1.0), transform=None) -> None:
         """(반지름, z) 단면을 z축 둘레로 돌려 만든다. 양 끝의 반지름이 0이면 꼭짓점 하나가 된다."""
         base = len(self.verts)
         ring_index: list[list[int]] = []
@@ -135,6 +150,8 @@ class Part:
                 for s in range(SEGMENTS):
                     t = (s + 1) % SEGMENTS
                     self.faces.append((lower[s], lower[t], upper[t], upper[s]))
+        if transform is not None:
+            self.verts[base:] = [transform(*v) for v in self.verts[base:]]
         assert len(self.verts) > base
 
 
@@ -167,24 +184,43 @@ def capsule_profile(radius: float, z_bottom: float, z_top: float, flat_bottom: b
     return out
 
 
+def torso_radius(z: float) -> float:
+    """TORSO_PROFILE 의 조절점 사이를 부드럽게 이어 z 높이의 반지름을 구한다."""
+    points = TORSO_PROFILE
+    if z <= points[0][0]:
+        return points[0][1]
+    for (z0, r0), (z1, r1) in zip(points, points[1:]):
+        if z <= z1:
+            return r0 + (r1 - r0) * smoothstep(z0, z1, z)
+    return points[-1][1]
+
+
 def build_head() -> Part:
     head = Part("head")
-    head.add_lathe(sphere_profile(HEAD_RADIUS, HEAD_CENTER_Z))
+    head.add_lathe(sphere_profile(HEAD_RZ, HEAD_CENTER_Z), scale=(HEAD_RX / HEAD_RZ, 1.0))
     return head
+
+
+def paddle_profile(length: float, radius: float) -> list[tuple[float, float]]:
+    """끝이 둥글게 좁아지는 잎 모양 단면 (반지름, 축 방향 거리)."""
+    out = [(0.0, 0.0), (radius, 0.0)]
+    steps = RINGS
+    for i in range(1, steps + 1):
+        t = i / steps
+        out.append((radius * max(0.0, 1.0 - t ** ARM_TAPER_EXPONENT) ** 0.5, length * t))
+    out[-1] = (0.0, out[-1][1])
+    return out
 
 
 def build_body_parts() -> list[Part]:
     parts: list[Part] = []
 
     torso = Part("torso")
+    profile = [(0.0, TORSO_BOTTOM_Z)]  # 아래쪽은 납작한 면 (가랑이 위를 덮는다)
     steps = RINGS * 2
-    profile = []
     for i in range(steps + 1):
-        t = i / steps
-        width = TORSO_BOTTOM_WIDTH + (TORSO_TOP_WIDTH - TORSO_BOTTOM_WIDTH) * t
-        radius = math.sqrt(max(0.0, 1.0 - (2.0 * t - 1.0) ** 2)) * width
-        profile.append((radius, TORSO_BOTTOM_Z + (TORSO_TOP_Z - TORSO_BOTTOM_Z) * t))
-    profile[0] = (0.0, profile[0][1])
+        z = TORSO_BOTTOM_Z + (TORSO_TOP_Z - TORSO_BOTTOM_Z) * i / steps
+        profile.append((torso_radius(z), z))
     profile[-1] = (0.0, profile[-1][1])
     torso.add_lathe(profile, scale=(1.0, TORSO_DEPTH_RATIO))
     parts.append(torso)
@@ -195,11 +231,16 @@ def build_body_parts() -> list[Part]:
         parts.append(leg)
 
         arm = Part("arm")
-        arm.add_lathe(capsule_profile(ARM_RADIUS, HAND_END_Z, SHOULDER_Z + ARM_RADIUS * 0.5), center=(sx * ARM_X, 0.0))
-        # 손끝이 몸 안쪽으로 말린다
-        arm.verts = [
-            (x - sx * ARM_CURL * smoothstep(ELBOW_Z - 0.05, HAND_END_Z, z), y, z) for (x, y, z) in arm.verts
-        ]
+        direction = Vector((sx * ARM_DIR[0], 0.0, ARM_DIR[2]))
+        up = Vector((sx * math.sin(_DROOP), 0.0, math.cos(_DROOP)))  # 팔 방향에 수직인 세로 방향
+        origin = Vector((sx * ARM_ORIGIN_X, 0.0, ARM_ORIGIN_Z))
+
+        def to_world(x, y, z, origin=origin, direction=direction, up=up):
+            p = origin + direction * z + up * x + Vector((0.0, 1.0, 0.0)) * y
+            return (p.x, p.y, p.z)
+
+        arm.add_lathe(paddle_profile(ARM_LENGTH, ARM_RADIUS_Z), scale=(1.0, ARM_RADIUS_Y / ARM_RADIUS_Z),
+                      transform=to_world)
         parts.append(arm)
     return parts
 
@@ -208,18 +249,17 @@ def build_body_parts() -> list[Part]:
 def body_weights(tag: str, x: float, z: float) -> dict[str, float]:
     side = "l" if x >= 0 else "r"
     if tag == "torso":
-        w_pelvis = 1.0 - smoothstep(0.24, 0.32, z)
+        w_pelvis = 1.0 - smoothstep(0.22, 0.30, z)
         weights = {"spine_01": 1.0 - w_pelvis, "pelvis": w_pelvis}
     elif tag == "leg":
-        side = "l" if x >= 0 else "r"
-        thigh = 1.0 - smoothstep(KNEE_Z - 0.03, KNEE_Z + 0.03, z)  # 무릎 위가 1
-        thigh = 1.0 - thigh                                         # 위쪽일수록 1
-        foot = 1.0 - smoothstep(ANKLE_Z - 0.015, ANKLE_Z + 0.015, z)
-        calf = (1.0 - thigh) - foot
-        weights = {f"thigh_{side}": thigh, f"calf_{side}": max(0.0, calf), f"foot_{side}": foot}
+        upper = smoothstep(KNEE_Z - 0.03, KNEE_Z + 0.03, z)          # 무릎 위쪽일수록 1
+        foot = 1.0 - smoothstep(ANKLE_Z - 0.015, ANKLE_Z + 0.015, z)  # 발목 아래쪽일수록 1
+        calf = 1.0 - upper - foot
+        weights = {f"thigh_{side}": upper, f"calf_{side}": max(0.0, calf), f"foot_{side}": foot}
     elif tag == "arm":
-        upper = smoothstep(ELBOW_Z - 0.03, ELBOW_Z + 0.03, z)
-        hand = 1.0 - smoothstep(WRIST_Z - 0.02, WRIST_Z + 0.02, z)
+        reach = abs(x)  # 팔은 거의 수평이므로 몸에서 떨어진 거리로 구간을 나눈다
+        upper = 1.0 - smoothstep(0.22, 0.30, reach)
+        hand = smoothstep(0.35, 0.42, reach)
         lower = 1.0 - upper - hand
         weights = {f"upperarm_{side}": upper, f"lowerarm_{side}": max(0.0, lower), f"hand_{side}": hand}
     else:
@@ -289,7 +329,7 @@ def add_morph(obj, name: str, offsets: list[Vector]) -> None:
 
 
 def head_morphs(coords: list[Vector]) -> dict[str, list[Vector]]:
-    pivot = Vector((0.0, 0.0, NECK_Z))
+    pivot = Vector((0.0, 0.0, NECK_Z))  # 머리 아래끝(목 자리)을 기준으로 키우고 줄인다
     return {
         "head_big": [(c - pivot) * (HEAD_BIG - 1.0) for c in coords],
         "head_small": [(c - pivot) * (HEAD_SMALL - 1.0) for c in coords],
@@ -315,8 +355,11 @@ def body_morphs(coords: list[Vector], tags: list[str]) -> dict[str, list[Vector]
             # 다리: 발은 바닥에 두고 위쪽을 늘이거나 줄인다. 나머지(몸통·팔)는 통째로 위아래로 이동한다.
             out[key].append(Vector((0.0, 0.0, dz * (c.z / LEG_TOP_Z if tag == "leg" else 1.0))))
 
+        # 팔: 어깨를 기준으로 팔 방향으로만 늘이고 줄인다 (두께는 그대로)
+        direction = Vector((s * ARM_DIR[0], 0.0, ARM_DIR[2]))
+        pivot = Vector((s * ARM_ORIGIN_X, 0.0, ARM_ORIGIN_Z))
         for key, factor in (("arms_long", ARMS_LONG), ("arms_short", ARMS_SHORT)):
-            out[key].append(Vector((0.0, 0.0, (c.z - SHOULDER_Z) * (factor - 1.0))) if tag == "arm" else zero)
+            out[key].append(direction * ((c - pivot).dot(direction) * (factor - 1.0)) if tag == "arm" else zero)
     return out
 
 
@@ -439,23 +482,23 @@ def make_previews(out_root: Path, objs, scratch: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     scratch.mkdir(parents=True, exist_ok=True)
 
-    cam = setup_render(360, 520)
+    cam = setup_render(460, 520)
     set_morphs(objs, {})
     views = [("FRONT", Vector((0, -1, 0))), ("SIDE", Vector((1, 0, 0))), ("BACK", Vector((0, 1, 0)))]
     frames = []
     for label, direction in views:
         tmp = scratch / f"view_{label}.png"
-        render_view(cam, tmp, direction, 1.25, 0.5)
+        render_view(cam, tmp, direction, 1.3, 0.5)
         frames.append((label, Image.open(tmp).convert("RGB")))
-    sheet = Image.new("RGB", (360 * 3, 520 + 28), (236, 236, 240))
+    sheet = Image.new("RGB", (460 * 3, 520 + 28), (236, 236, 240))
     draw = ImageDraw.Draw(sheet)
     for i, (label, img) in enumerate(frames):
-        sheet.paste(img, (360 * i, 28))
-        draw.text((360 * i + 8, 8), label, fill=(40, 40, 50))
+        sheet.paste(img, (460 * i, 28))
+        draw.text((460 * i + 8, 8), label, fill=(40, 40, 50))
     sheet.save(out_dir / "mannequin_preview.png")
 
     cam = bpy.context.scene.camera
-    setup_w, setup_h = 240, 380
+    setup_w, setup_h = 320, 360
     bpy.context.scene.render.resolution_x, bpy.context.scene.render.resolution_y = setup_w, setup_h
     variants = [("base", {})] + [(name, {name: 1.0}) for name in
                                  ["head_big", "head_small", "torso_wide", "torso_slim",
@@ -465,7 +508,7 @@ def make_previews(out_root: Path, objs, scratch: Path) -> None:
     for i, (label, active) in enumerate(variants):
         set_morphs(objs, active)
         tmp = scratch / f"morph_{label}.png"
-        render_view(cam, tmp, Vector((0, -1, 0)), 1.45, 0.55)
+        render_view(cam, tmp, Vector((0, -1, 0)), 1.45, 0.58)
         strip.paste(Image.open(tmp).convert("RGB"), (setup_w * i, 28))
         draw.text((setup_w * i + 8, 8), label, fill=(40, 40, 50))
     strip.save(out_dir / "mannequin_morphs.png")
