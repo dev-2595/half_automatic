@@ -10,6 +10,7 @@
 - [아트 03: 캐릭터 커스터마이징 요구사항](docs/art/03_character_customization.md)
 - [기획 01: 영역과 학습 진행 구조](docs/design/01_learning_structure.md)
 - [기획 02: 스테이지, 스킬, 별 시스템](docs/design/02_skill_system.md)
+- [기획 03: 튜토리얼과 레벨](docs/design/03_tutorial_and_level.md)
 - [개발 01: Unreal 프로젝트 설정](docs/dev/01_unreal_setup.md)
 - [개발 02: Blender → Unreal 제작 흐름](docs/dev/02_blender_pipeline.md)
 
