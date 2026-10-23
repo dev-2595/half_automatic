@@ -6,7 +6,7 @@
   3. 모든 정점이 뼈에 묶여 있고 가중치 합이 1이며 영향 뼈가 4개 이하인지
   3-1. 몸이 **하나로 이어진 닫힌 표면**인지 (팔·다리가 떨어진 덩어리가 아님)
   4. 체격 모프 타깃: 이름, 기본값이 0인지, 실제로 형태가 변하는지, 값이 터무니없이 크지 않은지
-  4-1. 다리 모양: 발목으로 가늘어지는지(원기둥이 아닌지), 앞으로 나온 발이 있는지
+  4-1. 다리 모양: 바깥선이 곧은지, 가랑이가 V자로 벌어지는지, 바닥이 둥근지, 발이 튀어나오지 않았는지
   5. 비율: 키 1.0 m, 머리 : 몸, 머리 가로/세로, 팔 끝~팔 끝 폭, 몸통 폭 (기본 체형 기준)
   6. 포즈 시험: 팔 뼈를 돌리면 팔만 움직이고 몸통은 움직이지 않는지
   7. FBX 다시 읽기: 메시·모프 타깃·뼈가 남아 있고 불필요한 끝 뼈(`_end`)가 없는지
@@ -48,10 +48,11 @@ EXPECTED_TORSO_WIDTH = 0.40      # 몸통(다리 바깥 끝 포함) 최대 폭 /
 TORSO_WIDTH_TOLERANCE = 0.05
 MAX_MORPH_DISPLACEMENT = 0.5  # m. 이보다 크면 모프가 망가진 것
 MIN_MORPH_DISPLACEMENT = 1e-4
-# 다리 모양 (원기둥이 아니어야 한다)
-MAX_ANKLE_TO_THIGH = 0.92   # 발목 폭 / 허벅지 폭: 1에 가까우면 원기둥
-MIN_ANKLE_TO_THIGH = 0.50
-MIN_FOOT_FORWARD = 0.12     # 발끝이 몸 중심에서 앞(-Y)으로 나온 거리 (m). 다리 반지름(약 0.09)보다 커야 발이 보인다
+# 다리 모양: 스케치 character_style_legs_v3.png (발목·발 없는 ω 모양, 바깥선은 수직, 안쪽은 아래로 벌어짐, 바닥은 둥긂)
+MAX_OUTER_DRIFT = 0.02      # 바깥 옆선이 높이에 따라 옆으로 밀리는 최대 거리 (m). 작을수록 수직
+MIN_GAP_OPENING = 0.02      # 두 다리 사이 틈이 아래로 갈수록 넓어지는 최소량 (m)
+MAX_LOWER_DEPTH = 0.11      # 다리 맨 아래의 앞뒤 돌출(발) 허용치 (m). 크면 발이 따로 튀어나온 것
+MAX_SOLE_TO_BELLY = 0.80    # 바닥 부근 폭 / 허벅지 부근 폭: 1에 가까우면 바닥이 납작하게 잘린 원기둥
 MAX_INFLUENCES = 4          # 정점 하나에 영향을 주는 뼈의 최대 수 (게임 엔진 스키닝 한계)
 MAX_BODY_TRIANGLES = 30000  # 마네킹 몸 삼각형 수 상한 (너무 무거워지지 않게)
 
@@ -128,27 +129,41 @@ def check_connected_surface(meshes: dict, errors: list[str]) -> None:
 
 
 def check_leg_shape(meshes: dict, errors: list[str]) -> None:
-    """다리가 위아래 굵기가 같은 원기둥이 아니라, 발목으로 가늘어지고 앞으로 나온 발이 있는지 검사한다."""
+    """다리가 발목·발 없는 둥근 덩어리(ω 모양)인지 검사한다. 원기둥이거나 발이 튀어나오면 실패한다."""
     body = meshes.get("SK_Mannequin_Body")
     if body is None:
         return
-    left_leg = [v.co for v in body.data.vertices if v.co.x > 0.01]  # 왼쪽(+X) 다리와 몸통
+    left_leg = [v.co for v in body.data.vertices if v.co.x > 0.005 and v.co.z < 0.17]  # 가랑이 아래의 왼쪽 다리
 
-    def width(z_low: float, z_high: float) -> float:
-        xs = [c.x for c in left_leg if z_low <= c.z <= z_high]
-        return (max(xs) - min(xs)) if xs else 0.0
+    def slice_of(z_low: float, z_high: float):
+        return [c for c in left_leg if z_low <= c.z <= z_high]
 
-    thigh, ankle = width(0.15, 0.17), width(0.10, 0.12)
-    if thigh <= 0.0 or ankle <= 0.0:
-        errors.append("leg shape: could not measure thigh/ankle width.")
+    def extent(points, axis: str, fn):
+        return fn(getattr(c, axis) for c in points) if points else None
+
+    low, mid, high = slice_of(0.02, 0.05), slice_of(0.08, 0.11), slice_of(0.13, 0.16)
+    if not (low and mid and high):
+        errors.append("leg shape: could not measure the legs.")
         return
-    ratio = ankle / thigh
-    if not MIN_ANKLE_TO_THIGH <= ratio <= MAX_ANKLE_TO_THIGH:
-        errors.append(f"leg shape: ankle/thigh width = {ratio:.2f}, expected {MIN_ANKLE_TO_THIGH}-{MAX_ANKLE_TO_THIGH} "
-                      "(legs must taper toward the ankle, not be cylinders).")
-    foot_forward = -min((c.y for c in left_leg if c.z < 0.08), default=0.0)
-    if foot_forward < MIN_FOOT_FORWARD:
-        errors.append(f"leg shape: foot extends {foot_forward:.3f} m forward, expected at least {MIN_FOOT_FORWARD} m.")
+
+    outer = [extent(slice_of(a, b), "x", max) for a, b in ((0.08, 0.11), (0.13, 0.16))]
+    if abs(outer[0] - outer[1]) > MAX_OUTER_DRIFT:
+        errors.append(f"leg shape: outer edge shifts {abs(outer[0] - outer[1]):.3f} m between heights; it must be straight.")
+
+    gap_mid, gap_high = extent(mid, "x", min), extent(high, "x", min)  # 안쪽 끝(몸 중심에서의 거리)
+    if gap_mid - gap_high < MIN_GAP_OPENING:
+        errors.append(f"leg shape: the gap between the legs opens by only {gap_mid - gap_high:.3f} m toward the ground "
+                      f"(expected at least {MIN_GAP_OPENING} m; the crotch must be a V).")
+
+    width_sole = extent(low, "x", max) - extent(low, "x", min)
+    width_belly = extent(high, "x", max) - extent(high, "x", min)
+    if width_belly <= 0 or width_sole / width_belly > MAX_SOLE_TO_BELLY:
+        errors.append(f"leg shape: width near the sole is {width_sole / width_belly:.2f} of the upper leg, "
+                      f"expected at most {MAX_SOLE_TO_BELLY} (rounded bottom, not a cut-off cylinder).")
+
+    depth = -min(c.y for c in slice_of(0.0, 0.08))
+    if depth > MAX_LOWER_DEPTH:
+        errors.append(f"leg shape: the lower leg sticks out {depth:.3f} m to the front; there must be no separate foot.")
 
 
 def check_morphs(meshes: dict, errors: list[str]) -> None:
