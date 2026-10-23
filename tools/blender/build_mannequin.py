@@ -65,11 +65,19 @@ HEAD_RX = 0.31 * W                        # 머리 폭 (스케치 v2 는 가로/
 HEAD_CENTER_Z = TOTAL_HEIGHT - HEAD_RZ
 NECK_Z = HEAD_CENTER_Z - HEAD_RZ          # 머리 아래끝 = 몸 위끝 (목 없음)
 
+# 다리: 허벅지에서 발목으로 가늘어지는 모양 + 앞으로 살짝 나온 둥근 발 (원기둥이 아니다)
 LEG_X = 0.125 * W
-LEG_RADIUS = 0.108 * W                    # 두 다리 사이에 틈(V자 자리)을 둔다
+LEG_RADIUS = 0.108 * W                    # 허벅지(맨 위) 반지름. 두 다리 사이에 틈(V자 자리)을 둔다
 LEG_TOP_Z = 0.26 * Z                      # 가랑이 꼭대기는 몸통이 시작하는 곳
-KNEE_Z = 0.13 * Z
-ANKLE_Z = 0.05 * Z
+ANKLE_RADIUS = 0.089 * W                  # 발목 반지름 (허벅지의 약 82%)
+ANKLE_CENTER_Z = 0.115 * Z
+KNEE_Z = 0.17 * Z
+ANKLE_Z = 0.08 * Z                        # 이보다 아래는 발 뼈가 맡는다
+FOOT_RADII = (0.092 * W, 0.120, 0.044 * Z)  # 발 타원체 반지름 (좌우, 앞뒤, 위아래)
+FOOT_CENTER_Y = -0.035                    # 앞(-Y)으로 살짝 나온다
+FOOT_CENTER_Z = 0.040 * Z
+LEG_BLEND = 0.055                         # 다리와 발을 섞는 폭 (넓을수록 발목-발 경계가 부드럽다)
+SOLE_ROUND = 0.015                        # 발바닥 가장자리를 둥글리는 폭
 
 # 몸통 윤곽 (z, 반지름). 몸통에서 발까지 옆선이 이어지도록, 아래쪽 반지름을 다리 바깥 끝(LEG_X + LEG_RADIUS)에 맞춘다.
 TORSO_PROFILE = [(z * Z, r * W) for z, r in
@@ -93,7 +101,6 @@ BODY_BOUNDS = ((-_HALF_SPAN, -0.22, -0.03), (_HALF_SPAN, 0.22, TORSO_TOP_Z + 0.0
 BLEND_LEG = 0.05                          # 몸통-다리 접합부를 섞는 폭
 BLEND_ARM = 0.05                          # 몸통-팔 접합부를 섞는 폭
 TORSO_EDGE_BLEND = 0.03                   # 몸통 아래·위 모서리를 둥글리는 폭
-LEG_EDGE_ROUND = 0.035 * W                # 다리 발바닥 모서리의 둥글기
 ARM_CENTER_ALONG = 0.375 * ARM_LENGTH     # 팔 타원체 중심이 어깨에서 떨어진 거리
 REGION_SOFTNESS = 0.015                   # 부위(몸통/다리/팔) 가중치가 섞이는 폭
 MAX_INFLUENCES = 4                        # 정점 하나에 영향을 주는 뼈의 최대 수
@@ -135,7 +142,7 @@ for _side, _sx in (("l", 1.0), ("r", -1.0)):
     BONES[f"hand_{_side}"] = (arm_point(_sx, 0.72 * ARM_LENGTH), arm_point(_sx, ARM_LENGTH), f"lowerarm_{_side}")
     BONES[f"thigh_{_side}"] = ((_sx * LEG_X, 0, LEG_TOP_Z - 0.02 * Z), (_sx * LEG_X, 0, KNEE_Z), "pelvis")
     BONES[f"calf_{_side}"] = ((_sx * LEG_X, 0, KNEE_Z), (_sx * LEG_X, 0, ANKLE_Z), f"thigh_{_side}")
-    BONES[f"foot_{_side}"] = ((_sx * LEG_X, 0, ANKLE_Z), (_sx * LEG_X, -0.09 * W, 0.03 * Z), f"calf_{_side}")
+    BONES[f"foot_{_side}"] = ((_sx * LEG_X, 0, ANKLE_Z), (_sx * LEG_X, FOOT_CENTER_Y - FOOT_RADII[1] * 0.6, FOOT_CENTER_Z), f"calf_{_side}")
 
 RIG_NAME = "mannequin_rig"  # "Armature" 이라는 이름은 Unreal 이 버릴 수 있다 (docs/dev/02)
 BODY_NAME = "SK_Mannequin_Body"
@@ -243,14 +250,43 @@ def field_torso(p: np.ndarray) -> np.ndarray:
     return smax(d, z - TORSO_TOP_Z, TORSO_EDGE_BLEND)
 
 
+def sd_round_cone(p: np.ndarray, a: np.ndarray, b: np.ndarray, r1: float, r2: float) -> np.ndarray:
+    """두 구(a: 반지름 r1, b: 반지름 r2)를 매끈하게 잇는 원뿔대 (Inigo Quilez 의 round cone 거리 함수)."""
+    ba = b - a
+    l2 = float(ba @ ba)
+    rr = r1 - r2
+    a2 = l2 - rr * rr
+    if a2 <= 0.0:
+        raise ValueError("round cone: one sphere contains the other.")
+    il2 = 1.0 / l2
+    pa = p - a
+    y = pa @ ba
+    z = y - l2
+    t = pa * l2 - np.outer(y, ba)
+    x2 = (t * t).sum(axis=1)
+    y2 = y * y * l2
+    z2 = z * z * l2
+    k = np.sign(rr) * rr * rr * x2
+    d_end_b = np.sqrt(x2 + z2) * il2 - r2
+    d_end_a = np.sqrt(x2 + y2) * il2 - r1
+    d_side = (np.sqrt(x2 * a2 * il2) + y * rr) * il2 - r1
+    return np.where(np.sign(z) * a2 * z2 > k, d_end_b, np.where(np.sign(y) * a2 * y2 < k, d_end_a, d_side))
+
+
+def sd_ellipsoid(p: np.ndarray, center: np.ndarray, radii: np.ndarray) -> np.ndarray:
+    q = p - center
+    k0 = np.linalg.norm(q / radii, axis=1)
+    k1 = np.linalg.norm(q / (radii * radii), axis=1)
+    return k0 * (k0 - 1.0) / np.maximum(k1, 1e-9)
+
+
 def field_leg(p: np.ndarray, sx: float) -> np.ndarray:
-    """바닥은 납작하고 모서리가 둥근 원기둥."""
-    rho = np.hypot(p[:, 0] - sx * LEG_X, p[:, 1])
-    half = LEG_TOP_Z / 2.0
-    qx = rho - (LEG_RADIUS - LEG_EDGE_ROUND)
-    qy = np.abs(p[:, 2] - half) - (half - LEG_EDGE_ROUND)
-    return (np.minimum(np.maximum(qx, qy), 0.0)
-            + np.hypot(np.maximum(qx, 0.0), np.maximum(qy, 0.0)) - LEG_EDGE_ROUND)
+    """허벅지에서 발목으로 가늘어지는 다리 + 앞으로 나온 둥근 발. 발바닥은 지면(z=0)에 평평하게 닿는다."""
+    hip = np.array([sx * LEG_X, 0.0, LEG_TOP_Z - LEG_RADIUS])
+    ankle = np.array([sx * LEG_X, 0.0, ANKLE_CENTER_Z])
+    leg = sd_round_cone(p, hip, ankle, LEG_RADIUS, ANKLE_RADIUS)
+    foot = sd_ellipsoid(p, np.array([sx * LEG_X, FOOT_CENTER_Y, FOOT_CENTER_Z]), np.array(FOOT_RADII))
+    return smax(smin(leg, foot, LEG_BLEND), -p[:, 2], SOLE_ROUND)
 
 
 def arm_frame(sx: float):
