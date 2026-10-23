@@ -1,6 +1,6 @@
 # 지식 (Knowledge) — 아트 01: 캐릭터 그림체
 
-> 상태: 초안 (v0.4) · 출처: 기획자 스케치 v1 (`reference/character_style_v1.png`), **v2 (`reference/character_style_v2.png`, "이런 느낌")**
+> 상태: 초안 (v0.5) · 출처: 기획자 스케치 v1 (`reference/character_style_v1.png`), **v2 (`reference/character_style_v2.png`, "이런 느낌")**
 > 원본 스케치를 해석한 내용은 모두 기획자 확인을 거쳤다.
 
 ![스케치 v2 (현재 기준)](reference/character_style_v2.png)
@@ -29,6 +29,12 @@
 | 얼굴·옷 | 없음 (마네킹이므로 의도된 공백) | — |
 
 **종합 비율: 머리 : 몸 ≈ 1.17 : 1 (약 2등신).**
+
+### 마네킹 체형 조정 (기획자 요청)
+
+3D 마네킹은 스케치 v2를 그대로 옮긴 모양이 **"옆으로 너무 통통하다"** 는 기획자 요청에 따라 **가로 치수를 0.85배**, **머리 비율을 0.54 → 0.50**으로 조정했다.
+머리 : 몸 ≈ 1 : 1, 머리 가로/세로 ≈ 1.05, 팔 끝~끝 ≈ 0.78, 몸통 최대 폭 ≈ 0.40. 위 표의 측정값은 스케치 원본의 값이며 마네킹 기본 체형과 다르다.
+전후 비교: `reference/mannequin_compare_slim.png`, 조절 방법: [개발 02 §7](../dev/02_blender_pipeline.md)
 
 ### v1과의 차이 (v2를 우선한다)
 

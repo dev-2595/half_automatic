@@ -6,7 +6,7 @@
   3. 모든 정점이 뼈에 묶여 있고 가중치 합이 1이며 영향 뼈가 4개 이하인지
   3-1. 몸이 **하나로 이어진 닫힌 표면**인지 (팔·다리가 떨어진 덩어리가 아님)
   4. 체격 모프 타깃: 이름, 기본값이 0인지, 실제로 형태가 변하는지, 값이 터무니없이 크지 않은지
-  5. 비율: 키 1.0 m, 머리 : 몸, 머리 가로/세로, 팔 끝~팔 끝 폭, 몸통 폭 (스케치 v2 측정값)
+  5. 비율: 키 1.0 m, 머리 : 몸, 머리 가로/세로, 팔 끝~팔 끝 폭, 몸통 폭 (기본 체형 기준)
   6. 포즈 시험: 팔 뼈를 돌리면 팔만 움직이고 몸통은 움직이지 않는지
   7. FBX 다시 읽기: 메시·모프 타깃·뼈가 남아 있고 불필요한 끝 뼈(`_end`)가 없는지
 
@@ -33,16 +33,17 @@ EXPECTED_MORPHS = {
     "SK_Mannequin_Head": {"head_big", "head_small", "legs_long", "legs_short"},
     "SK_Mannequin_Body": {"torso_wide", "torso_slim", "legs_long", "legs_short", "arms_long", "arms_short"},
 }
-# 기준: docs/art/reference/character_style_v2.png 를 측정한 값 (키 1.0 m 로 환산)
+# 기준: 스케치 v2 측정값에 기획자 요청("조금 기다랗게, 옆으로 덜 통통하게")을 반영한 체형
+#   가로 배율 0.85, 머리 비율(머리 높이/키) 0.50 으로 만든 기본 빌드의 값 (키 1.0 m 로 환산)
 EXPECTED_HEIGHT = 1.0
 HEIGHT_TOLERANCE = 0.01
-EXPECTED_HEAD_TO_BODY = 1.17     # 머리 높이 / (머리 아래 ~ 발바닥)
+EXPECTED_HEAD_TO_BODY = 1.00     # 머리 높이 / (머리 아래 ~ 발바닥) = 0.50 / 0.50
 HEAD_TO_BODY_TOLERANCE = 0.08
-EXPECTED_HEAD_ASPECT = 1.15      # 머리 가로 / 세로 (원보다 약간 넓은 타원)
+EXPECTED_HEAD_ASPECT = 1.05      # 머리 가로 / 세로 = (0.62 × 0.85) / 0.50
 HEAD_ASPECT_TOLERANCE = 0.05
-EXPECTED_SPAN = 0.92             # 팔 끝 ~ 팔 끝 / 키
+EXPECTED_SPAN = 0.78             # 팔 끝 ~ 팔 끝 / 키 = 0.92 × 0.85
 SPAN_TOLERANCE = 0.06
-EXPECTED_TORSO_WIDTH = 0.50      # 몸통 최대 폭 / 키
+EXPECTED_TORSO_WIDTH = 0.40      # 몸통(다리 바깥 끝 포함) 최대 폭 / 키 = 0.47 × 0.85
 TORSO_WIDTH_TOLERANCE = 0.05
 MAX_MORPH_DISPLACEMENT = 0.5  # m. 이보다 크면 모프가 망가진 것
 MIN_MORPH_DISPLACEMENT = 1e-4

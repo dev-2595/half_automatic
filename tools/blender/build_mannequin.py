@@ -19,6 +19,9 @@
 marching cubes 로 한 장의 메시로 뽑는다. 뼈 가중치와 체격 모프 타깃도 같은 거리 함수로 접합부에서 부드럽게 넘어가게 계산한다.
 (필요: numpy, scikit-image)
 
+체형 조절: 가로 배율(WIDTH_SCALE)과 머리 비율(HEAD_FRACTION)만 바꾸면 모든 치수가 함께 바뀐다.
+  MANNEQUIN_WIDTH_SCALE=0.8 MANNEQUIN_HEAD_FRACTION=0.48 python3 tools/blender/build_mannequin.py ...
+
 좌표계: Z 위, 캐릭터는 -Y 를 바라본다. 캐릭터의 왼쪽이 +X 이다. 단위는 미터이며 키는 1.0 m (= Unreal 100 cm).
 """
 
@@ -26,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -35,44 +39,62 @@ from mathutils import Vector
 from scipy.interpolate import PchipInterpolator
 from skimage import measure
 
+# ---------------------------------------------------------------- 조절 값
+# 스케치 v2 를 있는 그대로 측정한 모양은 WIDTH_SCALE = 1.0, HEAD_FRACTION = 0.54 이다.
+# 기획자 요청("조금 기다랗게, 옆으로 너무 통통하지 않게")에 따라 기본값을 날씬하게 잡았다.
+# 시험해 볼 때는 환경 변수로 바꿀 수 있다: MANNEQUIN_WIDTH_SCALE, MANNEQUIN_HEAD_FRACTION
+WIDTH_SCALE = float(os.environ.get("MANNEQUIN_WIDTH_SCALE", "0.85"))      # 가로(좌우·앞뒤) 치수 배율. 작을수록 날씬
+HEAD_FRACTION = float(os.environ.get("MANNEQUIN_HEAD_FRACTION", "0.50"))  # 머리 높이 / 키. 작을수록 몸이 길어진다
+
+if not 0.5 <= WIDTH_SCALE <= 1.5:
+    raise ValueError(f"WIDTH_SCALE {WIDTH_SCALE} is out of the supported range 0.5-1.5.")
+if not 0.3 <= HEAD_FRACTION <= 0.7:
+    raise ValueError(f"HEAD_FRACTION {HEAD_FRACTION} is out of the supported range 0.3-0.7.")
+
+W = WIDTH_SCALE                           # 가로 치수에 곱한다
+_V2_NECK_Z = 0.46                         # 스케치 v2 에서 머리 아래끝(= 몸 높이)
+Z = (1.0 - HEAD_FRACTION) / _V2_NECK_Z    # 몸의 세로 치수에 곱한다
+
 # ---------------------------------------------------------------- 치수 (미터)
 # 기준: docs/art/reference/character_style_v2.png 를 픽셀로 측정한 값 (키 481px = 1.0 m)
 #   머리 300 x 261px (가로/세로 1.15), 몸통 폭 위 0.38 / 최대 0.50 / 아래 0.47,
-#   가랑이 꼭대기 0.22, 팔 끝~팔 끝 0.92, 팔 두께 0.22
+#   가랑이 꼭대기 0.22, 팔 끝~팔 끝 0.92, 팔 두께 0.22  → 아래 값에 W(가로), Z(세로) 배율을 곱해 쓴다.
 TOTAL_HEIGHT = 1.0
-HEAD_RZ = 0.27                            # 머리 높이 0.54 (머리 : 몸 ≈ 1.17 : 1)
-HEAD_RX = 0.31                            # 머리 폭 0.62 → 가로/세로 ≈ 1.15 (원보다 약간 넓은 타원)
+HEAD_RZ = HEAD_FRACTION / 2.0             # 머리 높이 = 키 × HEAD_FRACTION
+HEAD_RX = 0.31 * W                        # 머리 폭 (스케치 v2 는 가로/세로 1.15 인 타원)
 HEAD_CENTER_Z = TOTAL_HEIGHT - HEAD_RZ
 NECK_Z = HEAD_CENTER_Z - HEAD_RZ          # 머리 아래끝 = 몸 위끝 (목 없음)
 
-LEG_X = 0.125
-LEG_RADIUS = 0.108                        # 두 다리 바깥 폭 ≈ 0.47, 사이에 틈(V자 자리)
-LEG_TOP_Z = 0.26                          # 가랑이 꼭대기는 몸통이 시작하는 곳 (≈ 0.22)
-KNEE_Z = 0.13
-ANKLE_Z = 0.05
+LEG_X = 0.125 * W
+LEG_RADIUS = 0.108 * W                    # 두 다리 사이에 틈(V자 자리)을 둔다
+LEG_TOP_Z = 0.26 * Z                      # 가랑이 꼭대기는 몸통이 시작하는 곳
+KNEE_Z = 0.13 * Z
+ANKLE_Z = 0.05 * Z
 
-# 몸통 윤곽 (z, 반지름). 스케치처럼 몸통에서 발까지 옆선이 이어지도록, 아래쪽 반지름을 다리 바깥 끝(LEG_X + LEG_RADIUS)에 맞춘다.
-TORSO_PROFILE = [(0.20, 0.208), (0.30, 0.229), (0.40, 0.222), (0.46, 0.185), (0.50, 0.100), (0.52, 0.0)]
+# 몸통 윤곽 (z, 반지름). 몸통에서 발까지 옆선이 이어지도록, 아래쪽 반지름을 다리 바깥 끝(LEG_X + LEG_RADIUS)에 맞춘다.
+TORSO_PROFILE = [(z * Z, r * W) for z, r in
+                 [(0.20, 0.208), (0.30, 0.229), (0.40, 0.222), (0.46, 0.185), (0.50, 0.100), (0.52, 0.0)]]
 TORSO_BOTTOM_Z = TORSO_PROFILE[0][0]
 TORSO_TOP_Z = TORSO_PROFILE[-1][0]        # 머리 아래로 살짝 겹친다
 TORSO_DEPTH_RATIO = 0.65
 
-# 팔: 가늘게 늘어진 막대가 아니라, 몸 옆으로 뻗은 통통한 잎 모양 (끝이 둥글고 살짝 처진다)
-ARM_ORIGIN_X = 0.14                       # 몸통 안쪽에서 시작해 옆으로 나온다
-ARM_ORIGIN_Z = 0.42
-ARM_LENGTH = 0.32                         # 어깨에서 팔 끝까지
+# 팔: 가늘게 늘어진 막대가 아니라, 몸 옆으로 뻗은 잎 모양 (끝이 둥글고 살짝 처진다)
+ARM_ORIGIN_X = 0.14 * W                   # 몸통 안쪽에서 시작해 옆으로 나온다
+ARM_ORIGIN_Z = 0.42 * Z
+ARM_LENGTH = 0.32 * W                     # 어깨에서 팔 끝까지
 ARM_DROOP_DEG = 7.0
-ARM_RADIUS_Z = 0.105                      # 세로 두께 0.21
-ARM_RADIUS_Y = 0.085                      # 앞뒤 두께
+ARM_RADIUS_Z = 0.105 * W                  # 세로 두께
+ARM_RADIUS_Y = 0.085 * W                  # 앞뒤 두께
 
 # 몸 표면 추출 (SDF + marching cubes)
 VOXEL = 0.011                             # 격자 간격 (m). 작을수록 매끈하지만 정점이 늘어난다
-BODY_BOUNDS = ((-0.52, -0.22, -0.03), (0.52, 0.22, 0.56))
+_HALF_SPAN = ARM_ORIGIN_X + ARM_LENGTH + 0.06
+BODY_BOUNDS = ((-_HALF_SPAN, -0.22, -0.03), (_HALF_SPAN, 0.22, TORSO_TOP_Z + 0.04))
 BLEND_LEG = 0.05                          # 몸통-다리 접합부를 섞는 폭
 BLEND_ARM = 0.05                          # 몸통-팔 접합부를 섞는 폭
 TORSO_EDGE_BLEND = 0.03                   # 몸통 아래·위 모서리를 둥글리는 폭
-LEG_EDGE_ROUND = 0.035                    # 다리 발바닥 모서리의 둥글기
-ARM_CENTER_ALONG = 0.12                   # 팔 타원체 중심이 어깨에서 떨어진 거리
+LEG_EDGE_ROUND = 0.035 * W                # 다리 발바닥 모서리의 둥글기
+ARM_CENTER_ALONG = 0.375 * ARM_LENGTH     # 팔 타원체 중심이 어깨에서 떨어진 거리
 REGION_SOFTNESS = 0.015                   # 부위(몸통/다리/팔) 가중치가 섞이는 폭
 MAX_INFLUENCES = 4                        # 정점 하나에 영향을 주는 뼈의 최대 수
 MIN_WEIGHT = 0.01                          # 1% 미만의 영향은 버린다 (멀리 떨어진 부위가 따라 움직이는 것을 막는다)
@@ -103,17 +125,17 @@ def arm_point(sx: float, along: float) -> tuple[float, float, float]:
 BONES = {
     # 이름: (head, tail, parent)
     "root": ((0, 0, 0.00), (0, 0, 0.06), None),
-    "pelvis": ((0, 0, 0.20), (0, 0, 0.28), "root"),
-    "spine_01": ((0, 0, 0.28), (0, 0, NECK_Z), "pelvis"),
+    "pelvis": ((0, 0, 0.20 * Z), (0, 0, 0.28 * Z), "root"),
+    "spine_01": ((0, 0, 0.28 * Z), (0, 0, NECK_Z), "pelvis"),
     "head": ((0, 0, NECK_Z), (0, 0, TOTAL_HEIGHT), "spine_01"),
 }
 for _side, _sx in (("l", 1.0), ("r", -1.0)):
-    BONES[f"upperarm_{_side}"] = (arm_point(_sx, 0.0), arm_point(_sx, 0.12), "spine_01")
-    BONES[f"lowerarm_{_side}"] = (arm_point(_sx, 0.12), arm_point(_sx, 0.23), f"upperarm_{_side}")
-    BONES[f"hand_{_side}"] = (arm_point(_sx, 0.23), arm_point(_sx, ARM_LENGTH), f"lowerarm_{_side}")
-    BONES[f"thigh_{_side}"] = ((_sx * LEG_X, 0, LEG_TOP_Z - 0.02), (_sx * LEG_X, 0, KNEE_Z), "pelvis")
+    BONES[f"upperarm_{_side}"] = (arm_point(_sx, 0.0), arm_point(_sx, 0.375 * ARM_LENGTH), "spine_01")
+    BONES[f"lowerarm_{_side}"] = (arm_point(_sx, 0.375 * ARM_LENGTH), arm_point(_sx, 0.72 * ARM_LENGTH), f"upperarm_{_side}")
+    BONES[f"hand_{_side}"] = (arm_point(_sx, 0.72 * ARM_LENGTH), arm_point(_sx, ARM_LENGTH), f"lowerarm_{_side}")
+    BONES[f"thigh_{_side}"] = ((_sx * LEG_X, 0, LEG_TOP_Z - 0.02 * Z), (_sx * LEG_X, 0, KNEE_Z), "pelvis")
     BONES[f"calf_{_side}"] = ((_sx * LEG_X, 0, KNEE_Z), (_sx * LEG_X, 0, ANKLE_Z), f"thigh_{_side}")
-    BONES[f"foot_{_side}"] = ((_sx * LEG_X, 0, ANKLE_Z), (_sx * LEG_X, -0.09, 0.03), f"calf_{_side}")
+    BONES[f"foot_{_side}"] = ((_sx * LEG_X, 0, ANKLE_Z), (_sx * LEG_X, -0.09 * W, 0.03 * Z), f"calf_{_side}")
 
 RIG_NAME = "mannequin_rig"  # "Armature" 이라는 이름은 Unreal 이 버릴 수 있다 (docs/dev/02)
 BODY_NAME = "SK_Mannequin_Body"
@@ -302,16 +324,16 @@ def build_body_mesh() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 def region_bone_weights(region: str, x: float, z: float) -> dict[str, float]:
     """한 부위 안에서 높이(또는 팔은 몸에서 떨어진 거리)에 따라 뼈에 나누는 가중치."""
     if region == "torso":
-        pelvis = 1.0 - smoothstep(0.22, 0.30, z)
+        pelvis = 1.0 - smoothstep(0.22 * Z, 0.30 * Z, z)
         return {"spine_01": 1.0 - pelvis, "pelvis": pelvis}
     side = region[-1]
     if region.startswith("leg"):
-        upper = smoothstep(KNEE_Z - 0.03, KNEE_Z + 0.03, z)          # 무릎 위쪽일수록 1
-        foot = 1.0 - smoothstep(ANKLE_Z - 0.015, ANKLE_Z + 0.015, z)  # 발목 아래쪽일수록 1
+        upper = smoothstep(KNEE_Z - 0.03 * Z, KNEE_Z + 0.03 * Z, z)          # 무릎 위쪽일수록 1
+        foot = 1.0 - smoothstep(ANKLE_Z - 0.015 * Z, ANKLE_Z + 0.015 * Z, z)  # 발목 아래쪽일수록 1
         return {f"thigh_{side}": upper, f"calf_{side}": max(0.0, 1.0 - upper - foot), f"foot_{side}": foot}
     reach = abs(x)  # 팔은 거의 수평이므로 몸에서 떨어진 거리로 구간을 나눈다
-    upper = 1.0 - smoothstep(0.22, 0.30, reach)
-    hand = smoothstep(0.35, 0.42, reach)
+    upper = 1.0 - smoothstep(0.22 * W, 0.30 * W, reach)
+    hand = smoothstep(0.35 * W, 0.42 * W, reach)
     return {f"upperarm_{side}": upper, f"lowerarm_{side}": max(0.0, 1.0 - upper - hand), f"hand_{side}": hand}
 
 
