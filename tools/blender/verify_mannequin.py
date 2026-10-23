@@ -7,6 +7,7 @@
   3-1. 몸이 **하나로 이어진 닫힌 표면**인지 (팔·다리가 떨어진 덩어리가 아님)
   4. 체격 모프 타깃: 이름, 기본값이 0인지, 실제로 형태가 변하는지, 값이 터무니없이 크지 않은지
   4-1. 다리 모양: 바깥선이 곧은지, 가랑이가 V자로 벌어지는지, 바닥이 둥근지, 발이 튀어나오지 않았는지
+  4-2. 엉덩이·가랑이 매끈함: 가랑이 높이, 구덩이 없음, 옆선이 곧음, 엉덩이 둘레 띠 없음
   5. 비율: 키 1.0 m, 머리 : 몸, 머리 가로/세로, 팔 끝~팔 끝 폭, 몸통 폭 (기본 체형 기준)
   6. 포즈 시험: 팔 뼈를 돌리면 팔만 움직이고 몸통은 움직이지 않는지
   7. FBX 다시 읽기: 메시·모프 타깃·뼈가 남아 있고 불필요한 끝 뼈(`_end`)가 없는지
@@ -50,9 +51,16 @@ MAX_MORPH_DISPLACEMENT = 0.5  # m. 이보다 크면 모프가 망가진 것
 MIN_MORPH_DISPLACEMENT = 1e-4
 # 다리 모양: 스케치 character_style_legs_v3.png (발목·발 없는 ω 모양, 바깥선은 수직, 안쪽은 아래로 벌어짐, 바닥은 둥긂)
 MAX_OUTER_DRIFT = 0.02      # 바깥 옆선이 높이에 따라 옆으로 밀리는 최대 거리 (m). 작을수록 수직
-MIN_GAP_OPENING = 0.02      # 두 다리 사이 틈이 아래로 갈수록 넓어지는 최소량 (m)
+MIN_GAP_OPENING = 0.012     # 두 다리 사이 틈이 아래로 갈수록 넓어지는 최소량 (m). 원기둥 다리는 0
 MAX_LOWER_DEPTH = 0.11      # 다리 맨 아래의 앞뒤 돌출(발) 허용치 (m). 크면 발이 따로 튀어나온 것
 MAX_SOLE_TO_BELLY = 0.80    # 바닥 부근 폭 / 허벅지 부근 폭: 1에 가까우면 바닥이 납작하게 잘린 원기둥
+# 엉덩이~가랑이 매끈함 (옆선이 곧고, 가랑이 위에 구덩이가 없고, 옆모습에 계단·꺾임이 없어야 한다)
+CROTCH_Z_RANGE = (0.16, 0.24)   # 가랑이 꼭대기 높이 (스케치는 바닥에서 몸 폭의 약 절반 ≈ 0.19)
+MAX_SIDELINE_DRIFT = 0.006      # z 0.06~0.30 에서 옆선(반폭)이 가장 넓은 곳과 좁은 곳의 차 (m). 새 빌드 0.004, 이전 0.009
+MAX_PIT_DEPTH = 0.004           # 가랑이 위 중심선에서 앞쪽 두께가 위로 갈수록 줄어드는 것의 허용치 (m). 크면 구덩이
+MAX_PROFILE_KINK = 0.0035       # 옆모습 앞/뒤 두께 곡선의 2차 차분 최대값 (m). 새 빌드 0.002, 이전 0.006
+MAX_PROFILE_STEP = 0.007        # 옆모습 앞쪽 두께가 0.02 m 높이 사이에 갑자기 바뀌는 최대량 (m). 새 빌드 0.004, 이전 0.009+
+MAX_MORPH_PROFILE_KINK = 0.005  # 체격 모프 타깃을 켠 상태에서의 허용치 (m)
 MAX_INFLUENCES = 4          # 정점 하나에 영향을 주는 뼈의 최대 수 (게임 엔진 스키닝 한계)
 MAX_BODY_TRIANGLES = 30000  # 마네킹 몸 삼각형 수 상한 (너무 무거워지지 않게)
 
@@ -166,6 +174,90 @@ def check_leg_shape(meshes: dict, errors: list[str]) -> None:
         errors.append(f"leg shape: the lower leg sticks out {depth:.3f} m to the front; there must be no separate foot.")
 
 
+def _depth_profiles(points):
+    """옆모습 앞/뒤 두께를 높이 0.14~0.34 에서 0.02 간격으로 잰다."""
+    lateral = [c for c in points if abs(c.x) < 0.30]
+    front, back = [], []
+    for i in range(11):
+        z = 0.14 + 0.02 * i
+        pts = [c for c in lateral if z - 0.01 <= c.z < z + 0.01]
+        front.append(-min(c.y for c in pts))
+        back.append(max(c.y for c in pts))
+    return front, back
+
+
+def _kink(values) -> float:
+    return max(abs(a - 2 * b + c) for a, b, c in zip(values, values[1:], values[2:]))
+
+
+def check_hip_smoothness(meshes: dict, errors: list[str]) -> None:
+    """엉덩이·가랑이 구간이 매끈한지 검사한다 (몸통과 다리가 만나는 곳의 혹, 띠, 구덩이, 옆모습 계단)."""
+    body = meshes.get("SK_Mannequin_Body")
+    if body is None:
+        return
+    coords = [v.co.copy() for v in body.data.vertices]
+
+    center = [c for c in coords if abs(c.x) < 0.006 and c.z > 0.06]
+    if not center:
+        errors.append("hip smoothness: no vertices found on the center line.")
+        return
+    apex = min(c.z for c in center)
+    if not CROTCH_Z_RANGE[0] <= apex <= CROTCH_Z_RANGE[1]:
+        errors.append(f"hip smoothness: the crotch apex is at z={apex:.3f} m, expected {CROTCH_Z_RANGE[0]}-{CROTCH_Z_RANGE[1]}.")
+
+    def slice_of(points, z: float, half: float = 0.01):
+        return [c for c in points if z - half <= c.z < z + half]
+
+    # 1) 가랑이 꼭대기 위 중심선: 앞쪽 두께가 위로 갈수록 줄어들면 구덩이다
+    depths = []
+    z = apex + 0.02
+    while z <= 0.30:
+        pts = slice_of(center, z)
+        if pts:
+            depths.append(-min(c.y for c in pts))
+        z += 0.02
+    for lower, upper in zip(depths, depths[1:]):
+        if upper < lower - MAX_PIT_DEPTH:
+            errors.append(f"hip smoothness: a pit above the crotch (center depth drops {lower - upper:.3f} m going up).")
+            break
+
+    # 2) 옆선이 곧아야 한다 (엉덩이에서 불룩해졌다가 허리에서 들어가면 안 된다)
+    lateral = [c for c in coords if abs(c.x) < 0.30]
+    half_widths = [max(c.x for c in slice_of(lateral, 0.06 + 0.02 * i)) for i in range(13)]
+    drift = max(half_widths) - min(half_widths)
+    if drift > MAX_SIDELINE_DRIFT:
+        errors.append(f"hip smoothness: the side line drifts {drift:.3f} m between z 0.06 and 0.30; it must run straight.")
+
+    # 3) 옆모습: 몸통이 끝나는 곳에 계단이나 꺾임이 없어야 한다
+    front, back = _depth_profiles(coords)
+    step = max(abs(a - b) for a, b in zip(front, front[1:]))
+    if step > MAX_PROFILE_STEP:
+        errors.append(f"hip smoothness: the side profile has a step of {step:.3f} m where the torso meets the legs.")
+    for name, values in (("front", front), ("back", back)):
+        if _kink(values) > MAX_PROFILE_KINK:
+            errors.append(f"hip smoothness: the {name} side profile kinks by {_kink(values):.4f} m around the hips.")
+
+    # 4) 체격 모프 타깃을 켠 상태에서도 엉덩이가 거칠어지지 않아야 한다 (부위 경계에서 갑자기 바뀌면 주름이 생긴다)
+    keys = body.data.shape_keys.key_blocks[1:]
+    try:
+        for target in keys:
+            if target.name in ("head_big", "head_small", "arms_long", "arms_short"):
+                continue
+            for key in keys:
+                key.value = 1.0 if key.name == target.name else 0.0
+            bpy.context.view_layer.update()
+            evaluated = body.evaluated_get(bpy.context.evaluated_depsgraph_get())
+            morphed = [v.co.copy() for v in evaluated.data.vertices]
+            f, b = _depth_profiles(morphed)
+            worst = max(_kink(f), _kink(b))
+            if worst > MAX_MORPH_PROFILE_KINK:
+                errors.append(f"hip smoothness: with {target.name} on, the hip profile kinks by {worst:.4f} m.")
+    finally:
+        for key in keys:
+            key.value = 0.0
+        bpy.context.view_layer.update()
+
+
 def check_morphs(meshes: dict, errors: list[str]) -> None:
     for name, expected in EXPECTED_MORPHS.items():
         obj = meshes.get(name)
@@ -215,12 +307,8 @@ def check_proportions(meshes: dict, errors: list[str]) -> None:
     if abs(span - EXPECTED_SPAN) > SPAN_TOLERANCE:
         errors.append(f"arm span / height = {span:.3f}, expected {EXPECTED_SPAN} (arms stick out sideways).")
 
-    # 몸통 최대 폭: 몸통·골반 뼈에 묶인 정점만으로 잰다 (팔·다리 제외)
-    torso_x = []
-    for v in body.data.vertices:
-        w = {body.vertex_groups[g.group].name: g.weight for g in v.groups}
-        if w.get("spine_01", 0.0) + w.get("pelvis", 0.0) > 0.5:
-            torso_x.append(abs(v.co.x))
+    # 몸통·다리의 최대 폭: 팔이 시작하는 높이(0.30) 아래의 정점으로 잰다 (뼈 가중치는 엉덩이에서 다리와 섞이므로 쓰지 않는다)
+    torso_x = [abs(v.co.x) for v in body.data.vertices if v.co.z < 0.30]
     torso_width = 2.0 * max(torso_x) / total if torso_x else 0.0
     if abs(torso_width - EXPECTED_TORSO_WIDTH) > TORSO_WIDTH_TOLERANCE:
         errors.append(f"torso width / height = {torso_width:.3f}, expected {EXPECTED_TORSO_WIDTH}.")
@@ -312,6 +400,7 @@ def main() -> int:
     check_connected_surface(meshes, errors)
     check_morphs(meshes, errors)
     check_leg_shape(meshes, errors)
+    check_hip_smoothness(meshes, errors)
     check_proportions(meshes, errors)
     check_pose(rig, meshes, errors)
     check_fbx(fbx, errors)
