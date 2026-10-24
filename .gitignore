@@ -1,0 +1,24 @@
+# Unreal Engine generated
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+.vs/
+.vscode/
+.idea/
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+*.xcworkspace
+*.code-workspace
+
+# Python
+__pycache__/
+
+# Blender backups
+*.blend1
+*.blend@
