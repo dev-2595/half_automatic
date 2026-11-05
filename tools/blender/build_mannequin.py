@@ -133,6 +133,7 @@ REGION_SOFTNESS = np.array([
     float(os.environ.get("MANNEQUIN_SOFT_LEG", "0.08")),
     float(os.environ.get("MANNEQUIN_SOFT_LEG", "0.08")),
     0.015, 0.015])
+MAX_PROJECTION_STEP = 1.5 * VOXEL               # 표면으로 되돌릴 때 한 번에 움직일 수 있는 최대 거리
 RELAX_ITERATIONS = int(os.environ.get("MANNEQUIN_RELAX", "12"))   # 정점 고르기 횟수. 늘리면 삼각형이 고르게 퍼져 표면의 얼룩이 줄어든다
 MAX_INFLUENCES = 4                        # 정점 하나에 영향을 주는 뼈의 최대 수
 MIN_WEIGHT = 0.01                          # 1% 미만의 영향은 버린다 (멀리 떨어진 부위가 따라 움직이는 것을 막는다)
@@ -359,20 +360,34 @@ def region_weights(parts: np.ndarray) -> np.ndarray:
     return w / w.sum(axis=1, keepdims=True)
 
 
-def project_to_surface(verts: np.ndarray, iterations: int = 3, eps: float = 0.0015) -> np.ndarray:
+def offset_field(offset=None):
+    """몸 표면에서 `offset` 만큼 바깥(음수면 안쪽)인 면을 0 으로 하는 거리 함수. 옷 만들기에 쓴다.
+    offset 은 숫자이거나, 높이 z(배열)를 받아 거리를 돌려주는 함수다 (아래로 갈수록 퍼지는 로브 등)."""
+    if offset is None:
+        return lambda p: body_fields(p)[0]
+    if callable(offset):
+        return lambda p: body_fields(p)[0] - offset(p[:, 2])
+    return lambda p: body_fields(p)[0] - offset
+
+
+def project_to_surface(verts: np.ndarray, iterations: int = 3, eps: float = 0.0015, field=None) -> np.ndarray:
     """격자 보간 오차를 줄이기 위해 각 정점을 거리 함수의 정확한 표면(거리 0)으로 옮긴다."""
+    field = field or offset_field()
     v = verts.copy()
     for _ in range(iterations):
-        d = body_fields(v)[0]
+        d = field(v)
         grad = np.stack([
-            (body_fields(v + np.eye(3)[i] * eps)[0] - body_fields(v - np.eye(3)[i] * eps)[0]) / (2 * eps)
+            (field(v + np.eye(3)[i] * eps) - field(v - np.eye(3)[i] * eps)) / (2 * eps)
             for i in range(3)], axis=1)
         norm2 = np.maximum((grad * grad).sum(axis=1, keepdims=True), 1e-12)
-        v = v - d[:, None] * grad / norm2
+        step = d[:, None] * grad / norm2
+        # 기울기가 거의 없는 곳(목 자리 맨 위 등)에서는 한 번에 아주 멀리 튀므로, 격자 한 칸 반 이내로 제한한다
+        length = np.maximum(np.linalg.norm(step, axis=1, keepdims=True), 1e-12)
+        v = v - step * np.minimum(1.0, MAX_PROJECTION_STEP / length)
     return v
 
 
-def relax_mesh(verts: np.ndarray, faces: np.ndarray, iterations: int = RELAX_ITERATIONS, weight: float = 0.5) -> np.ndarray:
+def relax_mesh(verts: np.ndarray, faces: np.ndarray, iterations: int = RELAX_ITERATIONS, weight: float = 0.5, field=None) -> np.ndarray:
     """격자(marching cubes) 때문에 생긴 울퉁불퉁한 잡음을 줄인다.
     각 정점을 이웃 정점의 평균 쪽으로 옮긴 뒤, 다시 거리 함수의 표면 위로 되돌려 모양은 유지한다."""
     n = len(verts)
@@ -384,26 +399,29 @@ def relax_mesh(verts: np.ndarray, faces: np.ndarray, iterations: int = RELAX_ITE
         total = np.zeros_like(v)
         np.add.at(total, edges[:, 0], v[edges[:, 1]])
         v = v + weight * (total / degree[:, None] - v)
-        v = project_to_surface(v, iterations=2)
+        v = project_to_surface(v, iterations=2, field=field)
     return v
 
 
-def build_body_mesh() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """단일 표면 메시 (정점, 삼각형 면, 정점별 부위 가중치 [N, 5])."""
+def build_body_mesh(offset=None, margin: float = 0.0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """단일 표면 메시 (정점, 삼각형 면, 정점별 부위 가중치 [N, 5]).
+    offset 을 주면 몸 표면에서 그만큼 바깥의 표면을 만든다 (옷). margin 은 그만큼 격자 범위를 넓힌다."""
+    field = offset_field(offset)
     lo, hi = (np.array(b) for b in BODY_BOUNDS)
+    lo, hi = lo - margin, hi + margin
     counts = np.ceil((hi - lo) / VOXEL).astype(int) + 1
     axes = [lo[i] + np.arange(counts[i]) * VOXEL for i in range(3)]
     grid = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
-    volume = body_fields(grid)[0].reshape(tuple(counts))
+    volume = field(grid).reshape(tuple(counts))
     verts, faces, _normals, _values = measure.marching_cubes(volume, level=0.0, spacing=(VOXEL, VOXEL, VOXEL))
-    verts = project_to_surface(verts + lo)
+    verts = project_to_surface(verts + lo, field=field)
 
     # 면의 방향이 바깥을 향하도록 맞춘다 (부호 있는 부피가 양수여야 한다)
     a, b, c = verts[faces[:, 0]], verts[faces[:, 1]], verts[faces[:, 2]]
     if np.einsum("ij,ij->i", a, np.cross(b, c)).sum() < 0.0:
         faces = faces[:, ::-1]
 
-    verts = relax_mesh(verts, faces)
+    verts = relax_mesh(verts, faces, field=field)
     regions = region_weights(body_fields(verts)[1])
     return verts, np.ascontiguousarray(faces), regions
 
