@@ -1,0 +1,27 @@
+# Unreal Engine generated
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+.vs/
+.vscode/
+.idea/
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+*.xcworkspace
+*.code-workspace
+
+# Python
+__pycache__/
+
+# Blender backups
+*.blend1
+*.blend@
+
+# tools/blender/build_outfit.py 로 다시 만들 수 있는 생성물 (약 5 MB)
+Art/Blender/Mannequin_Outfits.blend

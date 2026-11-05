@@ -1,0 +1,13 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.4",
+	"Category": "",
+	"Description": "교육형 RPG 「지식」",
+	"Modules": [
+		{
+			"Name": "Jisik",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}
