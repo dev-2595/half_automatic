@@ -8,6 +8,7 @@
   4. 체격 모프 타깃: 이름, 기본값이 0인지, 실제로 형태가 변하는지, 값이 터무니없이 크지 않은지
   4-1. 다리 모양: 바깥선이 곧은지, 가랑이가 V자로 벌어지는지, 바닥이 둥근지, 발이 튀어나오지 않았는지
   4-2. 엉덩이·가랑이 매끈함: 가랑이 높이, 구덩이 없음, 옆선이 곧음, 엉덩이 둘레 띠 없음
+  4-3. 움직임: 팔 들기·뻗기, 걷기, 앉기 자세에서 표면이 과하게 늘어나지 않는지
   5. 비율: 키 1.0 m, 머리 : 몸, 머리 가로/세로, 팔 끝~팔 끝 폭, 몸통 폭 (기본 체형 기준)
   6. 포즈 시험: 팔 뼈를 돌리면 팔만 움직이고 몸통은 움직이지 않는지
   7. FBX 다시 읽기: 메시·모프 타깃·뼈가 남아 있고 불필요한 끝 뼈(`_end`)가 없는지
@@ -24,7 +25,7 @@ import sys
 from pathlib import Path
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 EXPECTED_BONES = {
     "root", "pelvis", "spine_01", "head",
@@ -61,6 +62,14 @@ MAX_PIT_DEPTH = 0.004           # 가랑이 위 중심선에서 앞쪽 두께가
 MAX_PROFILE_KINK = 0.0035       # 옆모습 앞/뒤 두께 곡선의 2차 차분 최대값 (m). 새 빌드 0.002, 이전 0.006
 MAX_PROFILE_STEP = 0.007        # 옆모습 앞쪽 두께가 0.02 m 높이 사이에 갑자기 바뀌는 최대량 (m). 새 빌드 0.004, 이전 0.009+
 MAX_MORPH_PROFILE_KINK = 0.005  # 체격 모프 타깃을 켠 상태에서의 허용치 (m)
+# 움직임 시험 (뼈를 돌렸을 때 표면이 얼마나 늘어나는지). 기준은 기본 빌드 값에 여유를 둔 것이며 이전(경계가 좁은) 빌드는 걷기에서 3.95배, 364개였다.
+MOTION_LIMITS = {
+    # 자세 이름: (뼈 회전 목록, 최대 늘어남 배율, 많이 늘어난 모서리(1.5배 초과) 수 상한)
+    "arms_V_50": ([("upperarm_l", (0, 1, 0), -50), ("upperarm_r", (0, 1, 0), +50)], 4.0, 900),
+    "arms_forward_60": ([("upperarm_l", (0, 0, 1), -60), ("upperarm_r", (0, 0, 1), +60)], 3.0, 500),
+    "step_walk_35": ([("thigh_l", (1, 0, 0), -35), ("thigh_r", (1, 0, 0), +35)], 2.2, 100),
+    "sit_80": ([("thigh_l", (1, 0, 0), -80), ("thigh_r", (1, 0, 0), -80)], 4.0, 1100),
+}
 MAX_INFLUENCES = 4          # 정점 하나에 영향을 주는 뼈의 최대 수 (게임 엔진 스키닝 한계)
 MAX_BODY_TRIANGLES = 30000  # 마네킹 몸 삼각형 수 상한 (너무 무거워지지 않게)
 
@@ -348,6 +357,47 @@ def check_pose(rig, meshes: dict, errors: list[str]) -> None:
         errors.append(f"posing upperarm_l moved the right arm by {right_arm_moved:.4f} m.")
 
 
+def check_motion(rig, meshes: dict, errors: list[str]) -> None:
+    """대표 자세(팔 들기·뻗기, 걷기, 앉기)에서 표면이 너무 늘어나거나 찌그러지지 않는지 검사한다."""
+    body = meshes.get("SK_Mannequin_Body")
+    if rig is None or body is None:
+        return
+
+    def evaluated_positions():
+        bpy.context.view_layer.update()
+        mesh = body.evaluated_get(bpy.context.evaluated_depsgraph_get()).data
+        flat = [0.0] * (len(mesh.vertices) * 3)
+        mesh.vertices.foreach_get("co", flat)
+        return [Vector(flat[i:i + 3]) for i in range(0, len(flat), 3)], mesh
+
+    def reset():
+        for pb in rig.pose.bones:
+            pb.rotation_mode = "QUATERNION"
+            pb.rotation_quaternion = (1, 0, 0, 0)
+
+    reset()
+    rest, mesh = evaluated_positions()
+    edges = [tuple(e.vertices) for e in mesh.edges]
+    rest_len = [(rest[a] - rest[b]).length for a, b in edges]
+    try:
+        for name, (rotations, max_stretch, max_bad) in MOTION_LIMITS.items():
+            reset()
+            for bone_name, axis, degrees in rotations:
+                pb = rig.pose.bones[bone_name]
+                rest_basis = pb.bone.matrix_local.to_3x3()
+                rotation = Matrix.Rotation(math.radians(degrees), 3, Vector(axis))
+                pb.rotation_quaternion = (rest_basis.inverted() @ rotation @ rest_basis).to_quaternion()
+            posed, _ = evaluated_positions()
+            ratios = [((posed[a] - posed[b]).length / max(r, 1e-9)) for (a, b), r in zip(edges, rest_len)]
+            worst, bad = max(ratios), sum(1 for r in ratios if r > 1.5)
+            if worst > max_stretch or bad > max_bad:
+                errors.append(f"motion: pose {name} stretches the surface up to {worst:.2f}x ({bad} edges over 1.5x); "
+                              f"limits {max_stretch}x / {max_bad} edges.")
+    finally:
+        reset()
+        bpy.context.view_layer.update()
+
+
 def check_fbx(fbx_path: Path, errors: list[str]) -> None:
     bpy.ops.wm.read_factory_settings(use_empty=True)
     try:
@@ -403,6 +453,7 @@ def main() -> int:
     check_hip_smoothness(meshes, errors)
     check_proportions(meshes, errors)
     check_pose(rig, meshes, errors)
+    check_motion(rig, meshes, errors)
     check_fbx(fbx, errors)
 
     if errors:

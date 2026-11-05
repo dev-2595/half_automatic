@@ -126,7 +126,13 @@ BODY_BOUNDS = ((-_HALF_SPAN, -0.22, -0.03), (_HALF_SPAN, 0.22, TORSO_TOP_Z + 0.0
 BLEND_ARM = 0.05                          # 몸통-팔 접합부를 섞는 폭
 TORSO_EDGE_BLEND = 0.03                   # 몸통 아래·위 모서리를 둥글리는 폭
 ARM_CENTER_ALONG = 0.375 * ARM_LENGTH     # 팔 타원체 중심이 어깨에서 떨어진 거리
-REGION_SOFTNESS = 0.015                   # 부위(몸통/다리/팔) 가중치가 섞이는 폭
+# 부위(몸통, 왼다리, 오른다리, 왼팔, 오른팔)별로 뼈 영향이 섞이는 폭. 다리는 넓게 둔다: 몸통-다리 경계가 좁으면
+# 걷거나 앉을 때 엉덩이가 엿가락처럼 늘어나고 찌그러진다. 팔은 가슴 중앙이 팔을 따라 움직이지 않도록 좁게 둔다.
+REGION_SOFTNESS = np.array([
+    float(os.environ.get("MANNEQUIN_SOFT_TORSO", "0.015")),
+    float(os.environ.get("MANNEQUIN_SOFT_LEG", "0.08")),
+    float(os.environ.get("MANNEQUIN_SOFT_LEG", "0.08")),
+    0.015, 0.015])
 RELAX_ITERATIONS = int(os.environ.get("MANNEQUIN_RELAX", "12"))   # 정점 고르기 횟수. 늘리면 삼각형이 고르게 퍼져 표면의 얼룩이 줄어든다
 MAX_INFLUENCES = 4                        # 정점 하나에 영향을 주는 뼈의 최대 수
 MIN_WEIGHT = 0.01                          # 1% 미만의 영향은 버린다 (멀리 떨어진 부위가 따라 움직이는 것을 막는다)
@@ -349,7 +355,7 @@ def body_fields(p: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 def region_weights(parts: np.ndarray) -> np.ndarray:
     """각 정점이 몸통/왼다리/오른다리/왼팔/오른팔에 속하는 정도 (합 1). 접합부에서는 부드럽게 섞인다."""
-    w = np.exp(-(parts - parts.min(axis=1, keepdims=True)) / REGION_SOFTNESS)
+    w = np.exp(-(parts - parts.min(axis=1, keepdims=True)) / REGION_SOFTNESS[None, :])
     return w / w.sum(axis=1, keepdims=True)
 
 
