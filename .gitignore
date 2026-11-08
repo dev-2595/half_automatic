@@ -30,3 +30,8 @@ crashlytics-build.properties
 sysinfo.txt
 
 # 주의: .meta 파일은 반드시 커밋해야 한다 (에셋 GUID 참조 유지).
+
+# Unity 밖 검증용 프로젝트(tools/)는 커밋한다. 빌드 산출물만 제외.
+!/tools/**/*.csproj
+/tools/**/bin/
+/tools/**/obj/

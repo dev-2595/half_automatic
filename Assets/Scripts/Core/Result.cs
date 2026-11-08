@@ -13,6 +13,22 @@ namespace HalfAutomatic.Core
         AlreadySignedIn,
         DataCorrupt,
         StorageFailure,
+
+        // 성장 / 경제
+        InvalidArgument,
+        Overflow,
+        InsufficientCoins,
+        InsufficientScrolls,
+        LevelCapReached,
+
+        // 무기
+        UnknownWeapon,
+        WeaponNotFound,
+        NothingEquipped,
+        AlreadyEquipped,
+
+        // 튜토리얼
+        InvalidTutorialState,
     }
 
     /// <summary>값이 없는 연산의 결과.</summary>

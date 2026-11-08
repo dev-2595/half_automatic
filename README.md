@@ -11,7 +11,11 @@
 3. 재생(▶): 씬 구성과 관계없이 `AppRoot`가 런타임에 UI를 만듭니다.
 
 ## 테스트
-Window → General → Test Runner → EditMode → Run All
+- Unity: Window → General → Test Runner → EditMode → Run All
+- Unity 없이(.NET 8 SDK 필요): 코어를 Unity와 같은 조건(C# 9, .NET Standard 2.1)으로 컴파일하고 같은 테스트를 실행한다.
+  ```bash
+  dotnet test tools/CoreTests
+  ```
 
 ## 구조
 | 경로 | 책임 |
@@ -20,6 +24,19 @@ Window → General → Test Runner → EditMode → Run All
 | `Assets/Scripts/Platform` | Unity/OS 의존 구현 (파일 저장소, 시계) |
 | `Assets/Scripts/UI` | uGUI 화면과 앱 진입점 (`AppRoot`) |
 | `Assets/Tests/EditMode` | 코어 단위 테스트 |
+| `tools/` | Unity 밖 검증용 프로젝트(게임 빌드에 포함되지 않음) |
+
+### 코어 모듈 (`Assets/Scripts/Core`)
+| 폴더 | 내용 |
+|---|---|
+| `Balance` | 밸런스 수치(`BalanceConfig`, 임시값 포함)와 비용 곡선 |
+| `Economy` | 코인·강화의 서 지갑, 비용 |
+| `Jobs` | 직업과 무기 계열 |
+| `Progression` | 플레이어 레벨/EXP, 레벨업 계획기(수동·자동 레벨업 공용) |
+| `Weapons` | 무기 정의·보유·장착, 자동 합성(최대 5성), 무기 레벨업, 공격력 계산 |
+| `Stats` | 체력/공격력/쿨타임 스탯, 최종 능력치 |
+| `Loot` | 직업별 드랍 |
+| `Tutorial` | 데이터 기반 튜토리얼 엔진과 기본 스크립트(T1~T29) |
 
 ## 알려진 제한
 - UI 폰트는 OS 한글 폰트(맑은 고딕 등)를 씁니다. 모바일 빌드 전에 한글 폰트 에셋을 포함해야 합니다.
