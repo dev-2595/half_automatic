@@ -107,7 +107,8 @@ namespace HalfAutomatic.UI
             return go.GetComponent<Button>();
         }
 
-        public static InputField CreateInputField(Transform parent, string placeholder, int characterLimit)
+        public static InputField CreateInputField(Transform parent, string placeholder, int characterLimit,
+            bool password = false)
         {
             var go = new GameObject("InputField", typeof(RectTransform), typeof(Image), typeof(InputField),
                 typeof(LayoutElement));
@@ -129,7 +130,28 @@ namespace HalfAutomatic.UI
             input.placeholder = hint;
             input.characterLimit = characterLimit;
             input.lineType = InputField.LineType.SingleLine;
+            if (password)
+            {
+                input.contentType = InputField.ContentType.Password;
+                input.asteriskChar = '*';
+            }
             return input;
+        }
+
+        /// <summary>화면 위쪽에 뜨는 디멘션의 말(말풍선 대용). 다급한 느낌의 강조색.</summary>
+        public static Text CreateSpeech(Transform parent, string text)
+        {
+            Text speech = CreateLabel(parent, text, 44, Accent);
+            speech.fontStyle = FontStyle.Bold;
+            return speech;
+        }
+
+        /// <summary>회색 보조 버튼(뒤로, 안 바꾸기 등).</summary>
+        public static Button CreateSecondaryButton(Transform parent, string text)
+        {
+            Button button = CreateButton(parent, text, Panel);
+            button.GetComponentInChildren<Text>().color = TextColor;
+            return button;
         }
 
         private static Text CreateChildText(Transform parent, string name, string value, int size, Color color,

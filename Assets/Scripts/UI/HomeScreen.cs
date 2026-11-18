@@ -1,26 +1,37 @@
+using System;
 using UnityEngine;
 using UnityEngine.UI;
 using HalfAutomatic.Core;
 
 namespace HalfAutomatic.UI
 {
-    /// <summary>로그인 후 진입하는 임시 홈 화면. 이후 공장 화면으로 교체될 자리.</summary>
-    public sealed class HomeScreen
+    /// <summary>로그인 후 임시 홈 화면. 다음 단계에서 2D 게임 화면과 하단 탭으로 교체된다.</summary>
+    public sealed class HomeScreen : ScreenBase
     {
         private readonly Text _greeting;
+        private readonly Text _summary;
 
-        public RectTransform Root { get; }
-
-        public HomeScreen(Transform canvas)
+        public HomeScreen(Transform canvas, Action onSignOut) : base(canvas, "HomeScreen")
         {
-            Root = UiFactory.CreateScreenRoot("HomeScreen", canvas);
-            _greeting = UiFactory.CreateLabel(Root, string.Empty, 60, UiFactory.Accent);
-            UiFactory.CreateLabel(Root, "공장 화면은 다음 단계에서 만들어요", 36, UiFactory.TextColor);
+            if (onSignOut == null)
+            {
+                throw new ArgumentNullException(nameof(onSignOut));
+            }
+            _greeting = UiFactory.CreateLabel(Root, string.Empty, 56, UiFactory.Accent);
+            _summary = UiFactory.CreateLabel(Root, string.Empty, 36, UiFactory.TextColor);
+            UiFactory.CreateLabel(Root, "(게임 화면은 다음 단계에서 만들어요)", 30, UiFactory.TextColor);
+            CreateMessageArea();
+            Track(UiFactory.CreateSecondaryButton(Root, "로그아웃")).onClick.AddListener(() => onSignOut());
         }
 
-        public void Show(PlayerProfile profile)
+        public void Refresh(GameState state)
         {
-            _greeting.text = $"{profile.Nickname}님, 환영합니다!";
+            if (state == null)
+            {
+                return;
+            }
+            _greeting.text = $"으으으.... 성공이다! 나는 이제 {state.Nickname}!";
+            _summary.text = $"LV. {state.Level.Level}   코인 {state.Wallet.Coins}";
         }
     }
 }

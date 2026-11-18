@@ -78,6 +78,27 @@ namespace HalfAutomatic.Core
             return Result.Ok();
         }
 
+        /// <summary>저장값으로 복원. 음수거나 개수가 맞지 않으면 실패하고 상태는 그대로다.</summary>
+        public Result Restore(long coins, long[] scrolls)
+        {
+            if (coins < 0 || scrolls == null || scrolls.Length != JobRules.CategoryCount)
+            {
+                return Result.Fail(ErrorCode.InvalidArgument);
+            }
+            foreach (long amount in scrolls)
+            {
+                if (amount < 0)
+                {
+                    return Result.Fail(ErrorCode.InvalidArgument);
+                }
+            }
+            Coins = coins;
+            Array.Copy(scrolls, _scrolls, _scrolls.Length);
+            return Result.Ok();
+        }
+
+        public long[] ScrollsSnapshot() => (long[])_scrolls.Clone();
+
         private static void RequireDefined(WeaponCategory category)
         {
             if (!JobRules.IsDefined(category))

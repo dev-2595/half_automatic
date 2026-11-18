@@ -8,11 +8,21 @@ namespace HalfAutomatic.Core
         NicknameTooShort,
         NicknameTooLong,
         NicknameInvalidChar,
-        InvalidProfileData,
-        NoProfile,
-        AlreadySignedIn,
+        NicknameTooObvious,
+        NotFound,
         DataCorrupt,
         StorageFailure,
+
+        // 계정
+        InvalidUsername,
+        InvalidPassword,
+        UsernameTaken,
+        WrongCredentials,
+        TooManyAttempts,
+        PasswordUnchanged,
+        PasswordMismatch,
+        UnsupportedVersion,
+        InvalidOperation,
 
         // 성장 / 경제
         InvalidArgument,

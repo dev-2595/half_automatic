@@ -14,6 +14,9 @@ namespace HalfAutomatic.Tests
         [TestCase("ab cd", ErrorCode.NicknameInvalidChar)]
         [TestCase("ab!", ErrorCode.NicknameInvalidChar)]
         [TestCase("ab😀", ErrorCode.NicknameInvalidChar)]
+        [TestCase("디멘션", ErrorCode.NicknameTooObvious)]
+        [TestCase("진짜디멘션아님", ErrorCode.NicknameTooObvious)]
+        [TestCase("DiMenSion_7", ErrorCode.NicknameTooObvious)]
         public void Rejects_invalid(string raw, ErrorCode expected)
         {
             Result<string> result = NicknameRules.Validate(raw);

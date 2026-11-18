@@ -3,6 +3,23 @@ using System.Collections.Generic;
 
 namespace HalfAutomatic.Core
 {
+    /// <summary>저장/복원용 무기 값.</summary>
+    public readonly struct WeaponSnapshot
+    {
+        public long Id { get; }
+        public string DefinitionId { get; }
+        public int Stars { get; }
+        public int Level { get; }
+
+        public WeaponSnapshot(long id, string definitionId, int stars, int level)
+        {
+            Id = id;
+            DefinitionId = definitionId;
+            Stars = stars;
+            Level = level;
+        }
+    }
+
     /// <summary>보유 무기 목록과 장착 상태. 장착 슬롯은 1개.</summary>
     public sealed class WeaponInventory
     {
@@ -55,6 +72,51 @@ namespace HalfAutomatic.Core
                 return Result.Fail(ErrorCode.NothingEquipped);
             }
             Equipped = null;
+            return Result.Ok();
+        }
+
+        /// <summary>다음에 발급할 무기 id(저장용).</summary>
+        public long NextId => _nextId;
+
+        /// <summary>
+        /// 저장값으로 복원한다. 모두 검증한 뒤에만 반영한다(원자성).
+        /// equippedId = 0이면 장착 없음.
+        /// </summary>
+        public Result Restore(IReadOnlyList<WeaponSnapshot> weapons, long equippedId, long nextId, int maxStars,
+            int maxLevel)
+        {
+            if (weapons == null || nextId < 1 || equippedId < 0)
+            {
+                return Result.Fail(ErrorCode.InvalidArgument);
+            }
+            var ids = new HashSet<long>();
+            var restored = new List<WeaponInstance>(weapons.Count);
+            foreach (WeaponSnapshot w in weapons)
+            {
+                bool valid = w.Id >= 1 && w.Id < nextId && ids.Add(w.Id)
+                    && _catalog.TryGet(w.DefinitionId, out _)
+                    && w.Stars >= 1 && w.Stars <= maxStars
+                    && w.Level >= 1 && w.Level <= maxLevel;
+                if (!valid)
+                {
+                    return Result.Fail(ErrorCode.InvalidArgument);
+                }
+                restored.Add(new WeaponInstance(w.Id, w.DefinitionId, w.Stars, w.Level));
+            }
+            WeaponInstance equipped = null;
+            if (equippedId != 0)
+            {
+                equipped = restored.Find(w => w.Id == equippedId);
+                if (equipped == null)
+                {
+                    return Result.Fail(ErrorCode.InvalidArgument);
+                }
+            }
+
+            _items.Clear();
+            _items.AddRange(restored);
+            Equipped = equipped;
+            _nextId = nextId;
             return Result.Ok();
         }
 
